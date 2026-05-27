@@ -1,4 +1,13 @@
 <?php
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: POST, OPTIONS');
+header('Access-Control-Allow-Headers: Content-Type');
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(204);
+    exit;
+}
+
 $db = new PDO('sqlite:' . __DIR__ . '/grocery.db');
 $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 $db->exec('PRAGMA foreign_keys = ON');
@@ -56,6 +65,19 @@ function require_id(array $data): int
     return $id;
 }
 
+function require_existing_id(PDO $db, array $data): int
+{
+    $id = require_id($data);
+    $stmt = $db->prepare('SELECT COUNT(*) FROM items WHERE id = ?');
+    $stmt->execute([$id]);
+
+    if ((int) $stmt->fetchColumn() === 0) {
+        json_response(['success' => false, 'error' => 'Item not found'], 404);
+    }
+
+    return $id;
+}
+
 function require_name(array $data): string
 {
     $name = trim((string) ($data['name'] ?? ''));
@@ -92,17 +114,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             case 'toggle':
                 $stmt = $db->prepare('UPDATE items SET checked = ? WHERE id = ?');
-                $stmt->execute([!empty($data['checked']) ? 1 : 0, require_id($data)]);
+                $stmt->execute([!empty($data['checked']) ? 1 : 0, require_existing_id($db, $data)]);
                 json_response(['success' => true]);
 
             case 'edit':
                 $stmt = $db->prepare('UPDATE items SET name = ? WHERE id = ?');
-                $stmt->execute([require_name($data), require_id($data)]);
+                $stmt->execute([require_name($data), require_existing_id($db, $data)]);
                 json_response(['success' => true]);
 
             case 'delete':
                 $stmt = $db->prepare('DELETE FROM items WHERE id = ?');
-                $stmt->execute([require_id($data)]);
+                $stmt->execute([require_existing_id($db, $data)]);
                 json_response(['success' => true]);
 
             case 'reorder':
