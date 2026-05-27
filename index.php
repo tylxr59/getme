@@ -1,852 +1,886 @@
 <?php
-session_start();
-
-// Generate CSRF token if not exists
-if (empty($_SESSION['csrf_token'])) {
-    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
-}
-$csrfToken = $_SESSION['csrf_token'];
-
-// Database setup
-$dbFile = 'grocery.db';
-$db = new PDO('sqlite:' . $dbFile);
+$db = new PDO('sqlite:' . __DIR__ . '/grocery.db');
 $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+$db->exec('PRAGMA foreign_keys = ON');
 
-// Create table if it doesn't exist
 $db->exec("CREATE TABLE IF NOT EXISTS items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
-    checked INTEGER DEFAULT 0,
-    position INTEGER DEFAULT 0
+    checked INTEGER NOT NULL DEFAULT 0,
+    position INTEGER NOT NULL DEFAULT 0
 )");
+$db->exec("CREATE INDEX IF NOT EXISTS idx_items_sort ON items(checked, position, id)");
 
-// Create index for faster sorting
-$db->exec("CREATE INDEX IF NOT EXISTS idx_checked_position ON items(checked, position)");
-
-// Handle API requests
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+function json_response(array $payload, int $status = 200): void
+{
+    http_response_code($status);
     header('Content-Type: application/json');
-    $data = json_decode(file_get_contents('php://input'), true);
-
-    // CSRF validation (skip for external API endpoints)
-    if (isset($data['action']) && $data['action'] !== 'add_item') {
-        if (!isset($data['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $data['csrf_token'])) {
-            echo json_encode(['success' => false, 'error' => 'Invalid CSRF token']);
-            exit;
-        }
-    }
-
-    if (isset($data['action'])) {
-        switch ($data['action']) {
-            case 'add':
-                $name = trim($data['name'] ?? '');
-                if (empty($name)) {
-                    echo json_encode(['success' => false, 'error' => 'Item name is required']);
-                    break;
-                }
-                $stmt = $db->prepare("INSERT INTO items (name, position) VALUES (?, (SELECT COALESCE(MAX(position), 0) + 1 FROM items))");
-                $stmt->execute([$name]);
-                echo json_encode(['id' => $db->lastInsertId()]);
-                break;
-
-            case 'add_item':
-                // API endpoint for external apps (like Android)
-                try {
-                    if (!isset($data['name']) || empty(trim($data['name']))) {
-                        echo json_encode(['success' => false, 'error' => 'Item name is required']);
-                        break;
-                    }
-                    
-                    $stmt = $db->prepare("INSERT INTO items (name, position) VALUES (?, (SELECT COALESCE(MAX(position), 0) + 1 FROM items))");
-                    $result = $stmt->execute([trim($data['name'])]);
-                    
-                    echo json_encode(['success' => $result]);
-                } catch (Exception $e) {
-                    echo json_encode(['success' => false, 'error' => $e->getMessage()]);
-                }
-                break;
-
-            case 'toggle':
-                $stmt = $db->prepare("UPDATE items SET checked = ? WHERE id = ?");
-                $stmt->execute([$data['checked'], $data['id']]);
-                echo json_encode(['success' => true]);
-                break;
-
-            case 'edit':
-                $name = trim($data['name'] ?? '');
-                if (empty($name)) {
-                    echo json_encode(['success' => false, 'error' => 'Item name is required']);
-                    break;
-                }
-                $stmt = $db->prepare("UPDATE items SET name = ? WHERE id = ?");
-                $stmt->execute([$name, $data['id']]);
-                echo json_encode(['success' => true]);
-                break;
-
-            case 'delete':
-                $stmt = $db->prepare("DELETE FROM items WHERE id = ?");
-                $stmt->execute([$data['id']]);
-                echo json_encode(['success' => true]);
-                break;
-
-            case 'reorder':
-                try {
-                    $db->beginTransaction();
-                    foreach ($data['items'] as $index => $id) {
-                        $stmt = $db->prepare("UPDATE items SET position = ? WHERE id = ?");
-                        $stmt->execute([$index, $id]);
-                    }
-                    $db->commit();
-                    echo json_encode(['success' => true]);
-                } catch (Exception $e) {
-                    $db->rollBack();
-                    echo json_encode(['success' => false, 'error' => $e->getMessage()]);
-                }
-                break;
-
-            case 'fetch':
-                $items = $db->query("SELECT * FROM items ORDER BY checked ASC, position ASC")->fetchAll(PDO::FETCH_ASSOC);
-                echo json_encode(['items' => $items]);
-                break;
-
-            case 'clear_checked':
-                $db->exec("DELETE FROM items WHERE checked = 1");
-                echo json_encode(['success' => true]);
-                break;
-
-            case 'clear_all':
-                $db->exec("DELETE FROM items");
-                echo json_encode(['success' => true]);
-                break;
-        }
-    }
+    echo json_encode($payload);
     exit;
 }
 
-// Fetch items
-$items = $db->query("SELECT * FROM items ORDER BY checked ASC, position ASC")->fetchAll(PDO::FETCH_ASSOC);
+function request_data(): array
+{
+    $raw = file_get_contents('php://input');
+    $data = json_decode($raw, true);
+
+    if (is_array($data)) {
+        return $data;
+    }
+
+    if (!empty($_POST)) {
+        return $_POST;
+    }
+
+    return [];
+}
+
+function all_items(PDO $db): array
+{
+    return $db
+        ->query('SELECT id, name, checked, position FROM items ORDER BY checked ASC, position ASC, id ASC')
+        ->fetchAll(PDO::FETCH_ASSOC);
+}
+
+function next_position(PDO $db): int
+{
+    return (int) $db->query('SELECT COALESCE(MAX(position), 0) + 1 FROM items')->fetchColumn();
+}
+
+function require_id(array $data): int
+{
+    $id = filter_var($data['id'] ?? null, FILTER_VALIDATE_INT);
+    if (!$id) {
+        json_response(['success' => false, 'error' => 'Valid item id is required'], 422);
+    }
+    return $id;
+}
+
+function require_name(array $data): string
+{
+    $name = trim((string) ($data['name'] ?? ''));
+    if ($name === '') {
+        json_response(['success' => false, 'error' => 'Item name is required'], 422);
+    }
+    return substr($name, 0, 160);
+}
+
+function e(string $value): string
+{
+    return htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $data = request_data();
+    $action = (string) ($data['action'] ?? '');
+
+    try {
+        switch ($action) {
+            case 'fetch':
+                json_response(['success' => true, 'items' => all_items($db)]);
+
+            case 'add':
+            case 'add_item':
+                $stmt = $db->prepare('INSERT INTO items (name, position) VALUES (?, ?)');
+                $stmt->execute([require_name($data), next_position($db)]);
+                json_response([
+                    'success' => true,
+                    'item' => $db
+                        ->query('SELECT id, name, checked, position FROM items WHERE id = ' . (int) $db->lastInsertId())
+                        ->fetch(PDO::FETCH_ASSOC),
+                ]);
+
+            case 'toggle':
+                $stmt = $db->prepare('UPDATE items SET checked = ? WHERE id = ?');
+                $stmt->execute([!empty($data['checked']) ? 1 : 0, require_id($data)]);
+                json_response(['success' => true]);
+
+            case 'edit':
+                $stmt = $db->prepare('UPDATE items SET name = ? WHERE id = ?');
+                $stmt->execute([require_name($data), require_id($data)]);
+                json_response(['success' => true]);
+
+            case 'delete':
+                $stmt = $db->prepare('DELETE FROM items WHERE id = ?');
+                $stmt->execute([require_id($data)]);
+                json_response(['success' => true]);
+
+            case 'reorder':
+                if (!isset($data['items']) || !is_array($data['items'])) {
+                    json_response(['success' => false, 'error' => 'Item order is required'], 422);
+                }
+
+                $db->beginTransaction();
+                $stmt = $db->prepare('UPDATE items SET position = ? WHERE id = ?');
+                foreach (array_values($data['items']) as $index => $id) {
+                    $validId = filter_var($id, FILTER_VALIDATE_INT);
+                    if ($validId) {
+                        $stmt->execute([$index + 1, $validId]);
+                    }
+                }
+                $db->commit();
+                json_response(['success' => true]);
+
+            case 'clear_checked':
+                $db->exec('DELETE FROM items WHERE checked = 1');
+                json_response(['success' => true]);
+
+            case 'clear_all':
+                $db->exec('DELETE FROM items');
+                json_response(['success' => true]);
+
+            default:
+                json_response(['success' => false, 'error' => 'Unknown action'], 400);
+        }
+    } catch (Throwable $error) {
+        if ($db->inTransaction()) {
+            $db->rollBack();
+        }
+        json_response(['success' => false, 'error' => 'Something went wrong'], 500);
+    }
+}
+
+$items = all_items($db);
 ?>
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Grocery List</title>
     <style>
         :root {
-            --bg-color: #ffffff;
-            --text-color: #333333;
-            --border-color: #e0e0e0;
-            --hover-bg: #f5f5f5;
-            --checked-color: #999999;
-            --shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            color-scheme: light;
+            --bg: #f5f7f7;
+            --surface: #ffffff;
+            --surface-strong: #eef3f1;
+            --text: #222222;
+            --muted: #64716c;
+            --border: #d7dfdc;
+            --accent: #207c68;
+            --accent-strong: #166552;
+            --accent-focus: rgba(32, 124, 104, 0.22);
+            --danger: #b83232;
+            --danger-border: #c96f6f;
+            --soft: rgba(255, 255, 255, 0.68);
+            --shadow: 0 12px 32px rgba(20, 44, 38, 0.08);
         }
 
         [data-theme="dark"] {
-            --bg-color: #1a1a1a;
-            --text-color: #e0e0e0;
-            --border-color: #333333;
-            --hover-bg: #2a2a2a;
-            --checked-color: #666666;
-            --shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+            color-scheme: dark;
+            --bg: #161616;
+            --surface: #222222;
+            --surface-strong: #2d2d2d;
+            --text: #f1f1ee;
+            --muted: #aaa59c;
+            --border: #44413c;
+            --accent: #45b897;
+            --accent-strong: #69c8ad;
+            --accent-focus: rgba(69, 184, 151, 0.25);
+            --danger: #ff7878;
+            --danger-border: #b35d5d;
+            --soft: rgba(34, 34, 34, 0.68);
+            --shadow: 0 12px 32px rgba(0, 0, 0, 0.24);
         }
 
         * {
-            margin: 0;
-            padding: 0;
             box-sizing: border-box;
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background-color: var(--bg-color);
-            color: var(--text-color);
-            transition: background-color 0.3s, color 0.3s;
+            margin: 0;
             min-height: 100vh;
-            padding: 20px;
-            touch-action: pan-y;
+            background: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         }
 
-        .container {
-            max-width: 600px;
+        button,
+        input {
+            font: inherit;
+        }
+
+        button {
+            cursor: pointer;
+        }
+
+        .app {
+            width: min(100%, 720px);
             margin: 0 auto;
+            padding: 24px 16px 40px;
         }
 
-        header {
+        .topbar {
             display: flex;
-            justify-content: space-between;
             align-items: center;
-            margin-bottom: 30px;
+            justify-content: space-between;
+            gap: 16px;
+            margin-bottom: 18px;
         }
 
         h1 {
-            font-size: 28px;
-            font-weight: 600;
+            margin: 0;
+            font-size: 30px;
+            line-height: 1.1;
+            font-weight: 750;
         }
 
-        .theme-toggle {
-            background: none;
-            border: 1px solid var(--border-color);
-            border-radius: 6px;
-            padding: 8px 12px;
-            cursor: pointer;
-            color: var(--text-color);
-            font-size: 20px;
-            transition: background-color 0.2s;
+        .count {
+            margin-top: 4px;
+            color: var(--muted);
+            font-size: 14px;
         }
 
-        .theme-toggle:hover {
-            background-color: var(--hover-bg);
+        .icon-btn,
+        .item-action,
+        .drag-handle {
+            display: inline-grid;
+            place-items: center;
+            width: 42px;
+            height: 42px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--surface);
+            color: var(--text);
+        }
+
+        .icon-btn:hover,
+        .item-action:hover,
+        .drag-handle:hover {
+            background: var(--surface-strong);
         }
 
         .add-form {
-            margin-bottom: 20px;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 8px;
+            padding: 10px 0 14px;
+            background: var(--bg);
         }
 
         .add-form input {
-            width: 100%;
-            padding: 12px 16px;
-            border: 1px solid var(--border-color);
+            min-width: 0;
+            height: 48px;
+            border: 1px solid var(--border);
             border-radius: 8px;
+            padding: 0 14px;
+            background: var(--surface);
+            color: var(--text);
             font-size: 16px;
-            background-color: var(--bg-color);
-            color: var(--text-color);
-            transition: border-color 0.2s;
         }
 
         .add-form input:focus {
-            outline: none;
-            border-color: #4a90e2;
+            outline: 3px solid var(--accent-focus);
+            border-color: var(--accent);
+        }
+
+        .add-form button {
+            height: 48px;
+            min-width: 84px;
+            border: 0;
+            border-radius: 8px;
+            background: var(--accent);
+            color: #ffffff;
+            font-weight: 700;
+        }
+
+        .add-form button:hover {
+            background: var(--accent-strong);
         }
 
         .items-list {
+            display: grid;
+            gap: 8px;
+            margin: 0;
+            padding: 0;
             list-style: none;
         }
 
         .item {
-            display: flex;
+            display: grid;
+            grid-template-columns: auto auto minmax(0, 1fr) auto auto;
             align-items: center;
-            padding: 12px;
-            border: 1px solid var(--border-color);
+            gap: 8px;
+            min-height: 60px;
+            padding: 8px;
+            border: 1px solid var(--border);
             border-radius: 8px;
-            margin-bottom: 8px;
-            background-color: var(--bg-color);
-            transition: all 0.2s;
-            position: relative;
-            touch-action: none;
+            background: var(--surface);
+            box-shadow: var(--shadow);
+            transition: opacity 0.15s, transform 0.15s, border-color 0.15s;
         }
 
-        .item:hover {
-            background-color: var(--hover-bg);
-            box-shadow: var(--shadow);
+        .item.dragging,
+        .item.touch-dragging {
+            opacity: 0.7;
+            border-color: var(--accent);
         }
 
         .item.checked {
-            opacity: 0.6;
+            opacity: 0.62;
+        }
+
+        .item-checkbox {
+            width: 24px;
+            height: 24px;
+            accent-color: var(--accent);
+            cursor: pointer;
+        }
+
+        .item-text {
+            min-width: 0;
+            overflow-wrap: anywhere;
+            line-height: 1.35;
+            font-size: 17px;
         }
 
         .item.checked .item-text {
+            color: var(--muted);
             text-decoration: line-through;
-            color: var(--checked-color);
+        }
+
+        .item-text.editing {
+            padding: 7px 8px;
+            border-radius: 6px;
+            outline: 2px solid var(--accent);
+            background: var(--surface-strong);
+            text-decoration: none;
         }
 
         .drag-handle {
-            cursor: grab;
-            margin-right: 12px;
-            color: var(--checked-color);
-            font-size: 18px;
+            color: var(--muted);
             touch-action: none;
-            display: flex;
-            align-items: center;
+            cursor: grab;
         }
 
         .drag-handle:active {
             cursor: grabbing;
         }
 
-        .item-checkbox {
-            width: 20px;
-            height: 20px;
-            margin-right: 12px;
-            cursor: pointer;
+        .item-action {
+            color: var(--muted);
         }
 
-        .item-text {
-            flex: 1;
-            font-size: 16px;
+        .item-action.delete {
+            color: var(--danger);
         }
 
-        .delete-btn {
-            opacity: 0;
-            background: none;
-            border: none;
-            cursor: pointer;
-            padding: 8px;
-            font-size: 18px;
-            color: #e74c3c;
-            transition: opacity 0.2s;
+        .bulk-actions {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            margin-top: 14px;
         }
 
-        .item:hover .delete-btn {
-            opacity: 1;
-        }
-
-        .delete-btn:hover {
-            color: #c0392b;
-        }
-
-        .edit-btn {
-            opacity: 0;
-            background: none;
-            border: none;
-            cursor: pointer;
-            padding: 8px;
-            font-size: 18px;
-            color: #f39c12;
-            transition: opacity 0.2s;
-            margin-right: 4px;
-        }
-
-        .item:hover .edit-btn {
-            opacity: 1;
-        }
-
-        .edit-btn:hover {
-            color: #e67e22;
-        }
-
-        .item-text.editing {
-            outline: 2px solid #f39c12;
-            padding: 4px 8px;
-            border-radius: 4px;
-            background-color: var(--hover-bg);
-        }
-
-
-        @media (max-width: 768px) {
-            .delete-btn {
-                opacity: 1;
-            }
-
-            .edit-btn {
-                opacity: 1;
-            }
-        }
-
-        .clear-buttons {
-            display: flex;
-            gap: 10px;
-            margin-top: 20px;
-        }
-
-        .clear-btn {
-            flex: 1;
-            padding: 12px 16px;
-            border: 1px solid var(--border-color);
+        .bulk-actions button {
+            min-height: 44px;
+            border: 1px solid var(--border);
             border-radius: 8px;
-            font-size: 14px;
-            cursor: pointer;
-            background-color: var(--bg-color);
-            color: var(--text-color);
-            transition: all 0.2s;
+            background: var(--surface);
+            color: var(--text);
         }
 
-        .clear-btn:hover {
-            background-color: var(--hover-bg);
+        .bulk-actions button:hover {
+            background: var(--surface-strong);
+        }
+
+        .bulk-actions .danger {
+            color: var(--danger);
+            border-color: var(--danger-border);
+        }
+
+        .empty-state {
+            display: none;
+            padding: 30px 16px;
+            border: 1px dashed var(--border);
+            border-radius: 8px;
+            color: var(--muted);
+            text-align: center;
+            background: var(--soft);
+        }
+
+        .empty-state.visible {
+            display: block;
+        }
+
+        .toast {
+            position: fixed;
+            right: 16px;
+            bottom: 16px;
+            max-width: min(340px, calc(100vw - 32px));
+            padding: 12px 14px;
+            border-radius: 8px;
+            background: var(--text);
+            color: var(--bg);
             box-shadow: var(--shadow);
+            opacity: 0;
+            transform: translateY(8px);
+            pointer-events: none;
+            transition: opacity 0.2s, transform 0.2s;
         }
 
-        .clear-btn.danger {
-            color: #e74c3c;
-            border-color: #e74c3c;
+        .toast.visible {
+            opacity: 1;
+            transform: translateY(0);
         }
 
-        .clear-btn.danger:hover {
-            background-color: #e74c3c;
-            color: white;
+        svg {
+            width: 18px;
+            height: 18px;
+        }
+
+        @media (max-width: 540px) {
+            .app {
+                padding: 18px 10px 32px;
+            }
+
+            .item {
+                grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+                gap: 6px;
+            }
+
+            .icon-btn,
+            .item-action,
+            .drag-handle {
+                width: 40px;
+                height: 40px;
+            }
+
+            .bulk-actions {
+                grid-template-columns: 1fr;
+            }
         }
     </style>
 </head>
-
 <body>
-    <div class="container">
-        <header>
-            <h1>Grocery List</h1>
-            <button class="theme-toggle">🌙</button>
+    <main class="app">
+        <header class="topbar">
+            <div>
+                <h1>Grocery List</h1>
+                <div class="count" id="itemCount"></div>
+            </div>
+            <button class="icon-btn" id="themeToggle" type="button" aria-label="Toggle dark mode" title="Toggle dark mode">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M21.64 13a1 1 0 0 0-1.05-.14 8.05 8.05 0 0 1-3.37.73 8.15 8.15 0 0 1-8.14-8.1 8.59 8.59 0 0 1 .25-2A1 1 0 0 0 8 2.36 10.14 10.14 0 1 0 22 14.05 1 1 0 0 0 21.64 13Z"/></svg>
+            </button>
         </header>
 
         <form class="add-form" id="addForm">
-            <input type="text" id="newItem" placeholder="Add new item..." autocomplete="off">
+            <input type="text" id="newItem" name="name" placeholder="Add an item" autocomplete="off" maxlength="160">
+            <button type="submit">Add</button>
         </form>
 
         <ul class="items-list" id="itemsList">
             <?php foreach ($items as $item): ?>
-                <li class="item <?= $item['checked'] ? 'checked' : '' ?>" data-id="<?= $item['id'] ?>" draggable="true">
-                    <span class="drag-handle">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor"
-                            class="bi bi-grip-vertical" viewBox="0 0 16 16">
-                            <path
-                                d="M7 2a1 1 0 1 1-2 0 1 1 0 0 1 2 0m3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0M7 5a1 1 0 1 1-2 0 1 1 0 0 1 2 0m3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0M7 8a1 1 0 1 1-2 0 1 1 0 0 1 2 0m3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0m-3 3a1 1 0 1 1-2 0 1 1 0 0 1 2 0m3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0m-3 3a1 1 0 1 1-2 0 1 1 0 0 1 2 0m3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0" />
-                        </svg>
-                    </span>
-                    <input type="checkbox" class="item-checkbox" <?= $item['checked'] ? 'checked' : '' ?>>
-                    <span class="item-text" contenteditable="false"><?= htmlspecialchars($item['name']) ?></span>
-                    <button class="edit-btn">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor"
-                            class="bi bi-pencil" viewBox="0 0 16 16">
-                            <path
-                                d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1 .11-.168l10-10zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293zm-9.761 5.175-.106.106-1.528 3.821 3.821-1.528.106-.106A.5.5 0 0 1 5 12.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.468-.325z" />
-                        </svg>
+                <li class="item <?= (int) $item['checked'] ? 'checked' : '' ?>" data-id="<?= (int) $item['id'] ?>" draggable="true">
+                    <button class="drag-handle" type="button" aria-label="Drag item" title="Drag item">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M9 5a2 2 0 1 1-4 0 2 2 0 0 1 4 0Zm10 0a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM9 12a2 2 0 1 1-4 0 2 2 0 0 1 4 0Zm10 0a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM9 19a2 2 0 1 1-4 0 2 2 0 0 1 4 0Zm10 0a2 2 0 1 1-4 0 2 2 0 0 1 4 0Z"/></svg>
                     </button>
-                    <button class="delete-btn">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor"
-                            class="bi bi-trash" viewBox="0 0 16 16">
-                            <path
-                                d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z" />
-                            <path
-                                d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z" />
-                        </svg>
+                    <input type="checkbox" class="item-checkbox" aria-label="Toggle item" <?= (int) $item['checked'] ? 'checked' : '' ?>>
+                    <span class="item-text" contenteditable="false"><?= e($item['name']) ?></span>
+                    <button class="item-action edit" type="button" aria-label="Edit item" title="Edit item">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 17.46V20h2.54L17.96 8.58l-2.54-2.54L4 17.46ZM19.71 6.83a1 1 0 0 0 0-1.41l-1.13-1.13a1 1 0 0 0-1.41 0l-.88.88 2.54 2.54.88-.88Z"/></svg>
+                    </button>
+                    <button class="item-action delete" type="button" aria-label="Delete item" title="Delete item">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V7H6v12ZM8 4l1-1h6l1 1h4v2H4V4h4Z"/></svg>
                     </button>
                 </li>
             <?php endforeach; ?>
         </ul>
-        <div class="clear-buttons">
-            <button class="clear-btn" id="clearChecked">Clear Checked</button>
-            <button class="clear-btn danger" id="clearAll">Clear All</button>
+        <div class="empty-state">No groceries yet.</div>
+
+        <div class="bulk-actions">
+            <button type="button" id="clearChecked">Clear Checked</button>
+            <button type="button" id="exportMarkdown">Copy Markdown</button>
+            <button type="button" class="danger" id="clearAll">Clear All</button>
         </div>
-    </div>
+    </main>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
     <script>
-        // CSRF token for API requests
-        const csrfToken = '<?= htmlspecialchars($csrfToken) ?>';
-
-        // Cache DOM elements
         const itemsList = document.getElementById('itemsList');
-        const newItemInput = document.getElementById('newItem');
-        const themeToggle = document.querySelector('.theme-toggle');
         const addForm = document.getElementById('addForm');
+        const newItemInput = document.getElementById('newItem');
+        const itemCount = document.getElementById('itemCount');
+        const themeToggle = document.getElementById('themeToggle');
+        const toast = document.getElementById('toast');
 
-        // Create item HTML template (reusable function)
-        function createItemHTML(item) {
+        const icons = {
+            drag: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M9 5a2 2 0 1 1-4 0 2 2 0 0 1 4 0Zm10 0a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM9 12a2 2 0 1 1-4 0 2 2 0 0 1 4 0Zm10 0a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM9 19a2 2 0 1 1-4 0 2 2 0 0 1 4 0Zm10 0a2 2 0 1 1-4 0 2 2 0 0 1 4 0Z"/></svg>',
+            edit: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 17.46V20h2.54L17.96 8.58l-2.54-2.54L4 17.46ZM19.71 6.83a1 1 0 0 0 0-1.41l-1.13-1.13a1 1 0 0 0-1.41 0l-.88.88 2.54 2.54.88-.88Z"/></svg>',
+            delete: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V7H6v12ZM8 4l1-1h6l1 1h4v2H4V4h4Z"/></svg>'
+        };
+
+        let toastTimeout;
+        let draggedElement = null;
+        let touchDragElement = null;
+        let touchOffsetY = 0;
+        let placeholder = null;
+
+        function showToast(message) {
+            toast.textContent = message;
+            toast.classList.add('visible');
+            clearTimeout(toastTimeout);
+            toastTimeout = setTimeout(() => toast.classList.remove('visible'), 2200);
+        }
+
+        async function api(action, payload = {}) {
+            const response = await fetch('', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action, ...payload })
+            });
+            const data = await response.json();
+            if (!response.ok || !data.success) {
+                throw new Error(data.error || 'Request failed');
+            }
+            return data;
+        }
+
+        function escapeHtml(value) {
+            const element = document.createElement('div');
+            element.textContent = value;
+            return element.innerHTML;
+        }
+
+        function itemTemplate(item) {
+            const checked = Number(item.checked) === 1;
             return `
-                <span class="drag-handle">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" class="bi bi-grip-vertical" viewBox="0 0 16 16">
-                        <path d="M7 2a1 1 0 1 1-2 0 1 1 0 0 1 2 0m3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0M7 5a1 1 0 1 1-2 0 1 1 0 0 1 2 0m3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0M7 8a1 1 0 1 1-2 0 1 1 0 0 1 2 0m3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0m-3 3a1 1 0 1 1-2 0 1 1 0 0 1 2 0m3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0m-3 3a1 1 0 1 1-2 0 1 1 0 0 1 2 0m3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0"/>
-                    </svg>
-                </span>
-                <input type="checkbox" class="item-checkbox" ${item.checked ? 'checked' : ''}>
+                <button class="drag-handle" type="button" aria-label="Drag item" title="Drag item">${icons.drag}</button>
+                <input type="checkbox" class="item-checkbox" aria-label="Toggle item" ${checked ? 'checked' : ''}>
                 <span class="item-text" contenteditable="false">${escapeHtml(item.name)}</span>
-                <button class="edit-btn">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-pencil" viewBox="0 0 16 16">
-                        <path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1 .11-.168l10-10zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293zm-9.761 5.175-.106.106-1.528 3.821 3.821-1.528.106-.106A.5.5 0 0 1 5 12.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.468-.325z"/>
-                    </svg>
-                </button>
-                <button class="delete-btn">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-trash" viewBox="0 0 16 16">
-                        <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z"/>
-                        <path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z"/>
-                    </svg>
-                </button>
+                <button class="item-action edit" type="button" aria-label="Edit item" title="Edit item">${icons.edit}</button>
+                <button class="item-action delete" type="button" aria-label="Delete item" title="Delete item">${icons.delete}</button>
             `;
         }
 
         function createItemElement(item) {
-            const li = document.createElement('li');
-            li.className = 'item' + (item.checked ? ' checked' : '');
-            li.setAttribute('data-id', item.id);
-            li.setAttribute('draggable', 'true');
-            li.innerHTML = createItemHTML(item);
-            setupDragAndDrop(li);
-            return li;
+            const element = document.createElement('li');
+            element.className = 'item' + (Number(item.checked) === 1 ? ' checked' : '');
+            element.dataset.id = item.id;
+            element.draggable = true;
+            element.innerHTML = itemTemplate(item);
+            setupDragAndDrop(element);
+            return element;
         }
 
-        // Theme toggle
-        function toggleTheme() {
-            const html = document.documentElement;
-            const currentTheme = html.getAttribute('data-theme');
-            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
-            html.setAttribute('data-theme', newTheme);
-            localStorage.setItem('theme', newTheme);
-            themeToggle.textContent = newTheme === 'dark' ? '☀️' : '🌙';
+        function updateCount() {
+            const items = [...itemsList.querySelectorAll('.item')];
+            const open = items.filter(item => !item.classList.contains('checked')).length;
+            const total = items.length;
+            itemCount.textContent = total === 0
+                ? '0 items'
+                : `${open} to get, ${total} total`;
+            document.querySelector('.empty-state').classList.toggle('visible', total === 0);
         }
 
-        // Load saved theme
-        const savedTheme = localStorage.getItem('theme') || 'light';
-        document.documentElement.setAttribute('data-theme', savedTheme);
-        themeToggle.textContent = savedTheme === 'dark' ? '☀️' : '🌙';
+        function currentOrder() {
+            return [...itemsList.querySelectorAll('.item')].map(item => item.dataset.id);
+        }
 
-        // Event delegation for theme toggle
-        themeToggle.addEventListener('click', toggleTheme);
-
-        // Refresh list from database
         async function refreshList() {
             try {
-                const response = await fetch('', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ action: 'fetch', csrf_token: csrfToken })
-                });
-
-                if (!response.ok) throw new Error('Network error');
-                const data = await response.json();
-                if (data.error) throw new Error(data.error);
-                
-                itemsList.innerHTML = '';
-                data.items.forEach(item => {
-                    itemsList.appendChild(createItemElement(item));
-                });
+                const data = await api('fetch');
+                itemsList.replaceChildren(...data.items.map(createItemElement));
+                updateCount();
             } catch (error) {
-                console.error('Failed to refresh list:', error);
+                showToast(error.message);
             }
         }
 
-        // Debounced refresh
-        let refreshTimeout;
-        function debounceRefresh() {
-            clearTimeout(refreshTimeout);
-            refreshTimeout = setTimeout(refreshList, 300);
+        function applyTheme(theme) {
+            document.documentElement.dataset.theme = theme;
+            localStorage.setItem('theme', theme);
         }
 
-        // Listen for focus/blur events
-        window.addEventListener('focus', debounceRefresh);
+        applyTheme(localStorage.getItem('theme') || 'light');
 
-        // Listen for visibility change (for mobile devices switching tabs)
-        document.addEventListener('visibilitychange', () => {
-            if (!document.hidden) debounceRefresh();
+        themeToggle.addEventListener('click', () => {
+            applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
         });
 
-        // Event delegation for add form
-        addForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
+        addForm.addEventListener('submit', async event => {
+            event.preventDefault();
             const name = newItemInput.value.trim();
-
-            if (!name) return;
-
-            try {
-                const response = await fetch('', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ action: 'add', name, csrf_token: csrfToken })
-                });
-
-                if (!response.ok) throw new Error('Network error');
-                const data = await response.json();
-                if (data.error) throw new Error(data.error);
-
-                itemsList.appendChild(createItemElement({ id: data.id, name, checked: 0 }));
-                newItemInput.value = '';
-            } catch (error) {
-                console.error('Failed to add item:', error);
-                alert('Failed to add item. Please try again.');
-            }
-        });
-
-        // Event delegation for checkboxes and delete buttons
-        itemsList.addEventListener('change', async (e) => {
-            if (e.target.classList.contains('item-checkbox')) {
-                const item = e.target.closest('.item');
-                const id = parseInt(item.dataset.id);
-                const checked = e.target.checked;
-
-                try {
-                    const response = await fetch('', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ action: 'toggle', id, checked: checked ? 1 : 0, csrf_token: csrfToken })
-                    });
-
-                    if (!response.ok) throw new Error('Network error');
-
-                    if (checked) {
-                        item.classList.add('checked');
-                        itemsList.appendChild(item);
-                    } else {
-                        item.classList.remove('checked');
-                        const firstChecked = document.querySelector('.item.checked');
-                        if (firstChecked) {
-                            firstChecked.before(item);
-                        }
-                    }
-                } catch (error) {
-                    console.error('Failed to toggle item:', error);
-                    e.target.checked = !checked; // Revert checkbox state
-                }
-            }
-        });
-
-        itemsList.addEventListener('click', async (e) => {
-            // Handle edit button
-            if (e.target.closest('.edit-btn')) {
-                const item = e.target.closest('.item');
-                const textSpan = item.querySelector('.item-text');
-                const originalText = textSpan.textContent;
-
-                // Enable editing
-                textSpan.setAttribute('contenteditable', 'true');
-                textSpan.classList.add('editing');
-                textSpan.focus();
-
-                // Select all text
-                const range = document.createRange();
-                range.selectNodeContents(textSpan);
-                const selection = window.getSelection();
-                selection.removeAllRanges();
-                selection.addRange(range);
-
-                // Handle Enter key (save)
-                const handleKeydown = (event) => {
-                    if (event.key === 'Enter') {
-                        event.preventDefault();
-                        textSpan.blur();
-                    } else if (event.key === 'Escape') {
-                        textSpan.textContent = originalText;
-                        textSpan.blur();
-                    }
-                };
-
-                // Handle blur (save)
-                const handleBlur = async () => {
-                    textSpan.removeEventListener('keydown', handleKeydown);
-                    const newText = textSpan.textContent.trim();
-
-                    if (newText && newText !== originalText) {
-                        const id = parseInt(item.dataset.id);
-                        try {
-                            const response = await fetch('', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ action: 'edit', id, name: newText, csrf_token: csrfToken })
-                            });
-                            if (!response.ok) throw new Error('Network error');
-                        } catch (error) {
-                            console.error('Failed to edit item:', error);
-                            textSpan.textContent = originalText;
-                        }
-                    } else if (!newText) {
-                        textSpan.textContent = originalText;
-                    }
-
-                    textSpan.setAttribute('contenteditable', 'false');
-                    textSpan.classList.remove('editing');
-                };
-
-                textSpan.addEventListener('blur', handleBlur, { once: true });
-                textSpan.addEventListener('keydown', handleKeydown);
-
+            if (!name) {
                 return;
             }
 
-            // Handle delete button
-            if (e.target.closest('.delete-btn')) {
-                const item = e.target.closest('.item');
-                const id = parseInt(item.dataset.id);
+            newItemInput.value = '';
+            try {
+                const data = await api('add', { name });
+                itemsList.appendChild(createItemElement(data.item));
+                updateCount();
+            } catch (error) {
+                newItemInput.value = name;
+                showToast(error.message);
+            }
+        });
 
+        itemsList.addEventListener('change', async event => {
+            if (!event.target.classList.contains('item-checkbox')) {
+                return;
+            }
+
+            const item = event.target.closest('.item');
+            const checked = event.target.checked;
+            item.classList.toggle('checked', checked);
+            checked ? itemsList.appendChild(item) : itemsList.prepend(item);
+            updateCount();
+
+            try {
+                await api('toggle', { id: item.dataset.id, checked: checked ? 1 : 0 });
+                await api('reorder', { items: currentOrder() });
+            } catch (error) {
+                event.target.checked = !checked;
+                item.classList.toggle('checked', !checked);
+                showToast(error.message);
+            }
+        });
+
+        itemsList.addEventListener('click', async event => {
+            const editButton = event.target.closest('.edit');
+            const deleteButton = event.target.closest('.delete');
+
+            if (editButton) {
+                startEditing(editButton.closest('.item'));
+                return;
+            }
+
+            if (deleteButton) {
+                const item = deleteButton.closest('.item');
                 try {
-                    const response = await fetch('', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ action: 'delete', id, csrf_token: csrfToken })
-                    });
-                    if (!response.ok) throw new Error('Network error');
+                    await api('delete', { id: item.dataset.id });
                     item.remove();
+                    updateCount();
                 } catch (error) {
-                    console.error('Failed to delete item:', error);
+                    showToast(error.message);
                 }
             }
         });
 
-        // Drag and drop
-        let draggedElement = null;
-        let touchDragElement = null;
-        let touchStartY = 0;
-        let touchOffsetY = 0;
-        let placeholder = null;
+        itemsList.addEventListener('dblclick', event => {
+            const item = event.target.closest('.item');
+            if (item && event.target.classList.contains('item-text')) {
+                startEditing(item);
+            }
+        });
+
+        function startEditing(item) {
+            const text = item.querySelector('.item-text');
+            if (text.classList.contains('editing')) {
+                return;
+            }
+
+            const original = text.textContent;
+            text.contentEditable = 'true';
+            text.classList.add('editing');
+            text.focus();
+
+            const range = document.createRange();
+            range.selectNodeContents(text);
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(range);
+
+            const finish = async save => {
+                text.removeEventListener('keydown', onKeydown);
+                text.removeEventListener('blur', onBlur);
+                text.contentEditable = 'false';
+                text.classList.remove('editing');
+
+                const next = text.textContent.trim();
+                if (!save || next === '') {
+                    text.textContent = original;
+                    return;
+                }
+                if (next === original) {
+                    return;
+                }
+
+                try {
+                    await api('edit', { id: item.dataset.id, name: next });
+                } catch (error) {
+                    text.textContent = original;
+                    showToast(error.message);
+                }
+            };
+
+            const onBlur = () => finish(true);
+            const onKeydown = event => {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    finish(true);
+                }
+                if (event.key === 'Escape') {
+                    event.preventDefault();
+                    finish(false);
+                }
+            };
+
+            text.addEventListener('blur', onBlur);
+            text.addEventListener('keydown', onKeydown);
+        }
 
         function setupDragAndDrop(element) {
-            // Desktop drag and drop
-            element.addEventListener('dragstart', handleDragStart);
-            element.addEventListener('dragover', handleDragOver);
-            element.addEventListener('drop', handleDrop);
-            element.addEventListener('dragend', handleDragEnd);
+            element.addEventListener('dragstart', event => {
+                if (!event.target.closest('.drag-handle')) {
+                    event.preventDefault();
+                    return;
+                }
 
-            // Touch events for mobile
+                draggedElement = element;
+                element.classList.add('dragging');
+                event.dataTransfer.effectAllowed = 'move';
+            });
+
+            element.addEventListener('dragover', event => {
+                event.preventDefault();
+                const after = dragAfterElement(event.clientY, '.item:not(.dragging)');
+                after ? after.before(draggedElement) : itemsList.appendChild(draggedElement);
+            });
+
+            element.addEventListener('dragend', () => {
+                element.classList.remove('dragging');
+                draggedElement = null;
+                saveOrder();
+            });
+
             const handle = element.querySelector('.drag-handle');
-            handle.addEventListener('touchstart', handleTouchStart, { passive: false });
-            handle.addEventListener('touchmove', handleTouchMove, { passive: false });
-            handle.addEventListener('touchend', handleTouchEnd);
+            handle.addEventListener('touchstart', startTouchDrag, { passive: false });
+            handle.addEventListener('touchmove', moveTouchDrag, { passive: false });
+            handle.addEventListener('touchend', endTouchDrag);
         }
 
-        // Desktop drag handlers
-        function handleDragStart(e) {
-            draggedElement = this;
-            this.classList.add('dragging');
+        function dragAfterElement(y, selector) {
+            return [...itemsList.querySelectorAll(selector)].reduce((closest, child) => {
+                const box = child.getBoundingClientRect();
+                const offset = y - box.top - box.height / 2;
+                return offset < 0 && offset > closest.offset ? { offset, element: child } : closest;
+            }, { offset: Number.NEGATIVE_INFINITY }).element;
         }
 
-        function handleDragOver(e) {
-            e.preventDefault();
-            const afterElement = getDragAfterElement(e.clientY);
-            if (afterElement == null) {
-                itemsList.appendChild(draggedElement);
-            } else {
-                afterElement.before(draggedElement);
-            }
-        }
-
-        function handleDrop(e) {
-            e.preventDefault();
-        }
-
-        function handleDragEnd() {
-            this.classList.remove('dragging');
-            updateOrder();
-        }
-
-        // Touch handlers for mobile
-        function handleTouchStart(e) {
-            e.preventDefault();
-            touchDragElement = e.target.closest('.item');
-            const touch = e.touches[0];
+        function startTouchDrag(event) {
+            event.preventDefault();
+            touchDragElement = event.target.closest('.item');
+            const touch = event.touches[0];
             const rect = touchDragElement.getBoundingClientRect();
-
-            touchStartY = touch.clientY;
             touchOffsetY = touch.clientY - rect.top;
 
-            // Create a placeholder
             placeholder = document.createElement('li');
             placeholder.className = 'item';
-            placeholder.style.height = rect.height + 'px';
+            placeholder.style.height = `${rect.height}px`;
             placeholder.style.opacity = '0';
             touchDragElement.after(placeholder);
 
-            // Make the element fixed position
-            touchDragElement.style.position = 'fixed';
-            touchDragElement.style.width = rect.width + 'px';
-            touchDragElement.style.left = rect.left + 'px';
-            touchDragElement.style.top = rect.top + 'px';
-            touchDragElement.style.zIndex = '1000';
+            Object.assign(touchDragElement.style, {
+                position: 'fixed',
+                width: `${rect.width}px`,
+                left: `${rect.left}px`,
+                top: `${rect.top}px`,
+                zIndex: '1000'
+            });
             touchDragElement.classList.add('touch-dragging');
         }
 
-        function handleTouchMove(e) {
-            if (!touchDragElement) return;
-            e.preventDefault();
-
-            const touch = e.touches[0];
-
-            // Move the element to follow the finger
-            touchDragElement.style.top = (touch.clientY - touchOffsetY) + 'px';
-
-            // Find where to insert the placeholder
-            const afterElement = getDragAfterElementTouch(touch.clientY);
-
-            if (afterElement == null) {
-                itemsList.appendChild(placeholder);
-            } else {
-                afterElement.before(placeholder);
+        function moveTouchDrag(event) {
+            if (!touchDragElement) {
+                return;
             }
+            event.preventDefault();
+            const touch = event.touches[0];
+            touchDragElement.style.top = `${touch.clientY - touchOffsetY}px`;
+            const after = dragAfterElement(touch.clientY, '.item:not(.touch-dragging)');
+            after ? after.before(placeholder) : itemsList.appendChild(placeholder);
         }
 
-        function handleTouchEnd(e) {
-            if (!touchDragElement) return;
-
-            // Remove fixed positioning
-            touchDragElement.style.position = '';
-            touchDragElement.style.width = '';
-            touchDragElement.style.left = '';
-            touchDragElement.style.top = '';
-            touchDragElement.style.zIndex = '';
-            touchDragElement.classList.remove('touch-dragging');
-
-            // Replace placeholder with actual element
-            if (placeholder && placeholder.parentNode) {
-                placeholder.replaceWith(touchDragElement);
+        function endTouchDrag() {
+            if (!touchDragElement) {
+                return;
             }
 
+            Object.assign(touchDragElement.style, {
+                position: '',
+                width: '',
+                left: '',
+                top: '',
+                zIndex: ''
+            });
+            touchDragElement.classList.remove('touch-dragging');
+            placeholder.replaceWith(touchDragElement);
             placeholder = null;
             touchDragElement = null;
-            updateOrder();
+            saveOrder();
         }
 
-        function getDragAfterElement(y) {
-            const elements = [...document.querySelectorAll('.item:not(.dragging)')];
-            return elements.reduce((closest, child) => {
-                const box = child.getBoundingClientRect();
-                const offset = y - box.top - box.height / 2;
-                if (offset < 0 && offset > closest.offset) {
-                    return { offset, element: child };
-                }
-                return closest;
-            }, { offset: Number.NEGATIVE_INFINITY }).element;
-        }
-
-        function getDragAfterElementTouch(y) {
-            const elements = [...document.querySelectorAll('.item:not(.touch-dragging)')];
-            return elements.reduce((closest, child) => {
-                const box = child.getBoundingClientRect();
-                const offset = y - box.top - box.height / 2;
-                if (offset < 0 && offset > closest.offset) {
-                    return { offset, element: child };
-                }
-                return closest;
-            }, { offset: Number.NEGATIVE_INFINITY }).element;
-        }
-
-        async function updateOrder() {
-            const items = [...document.querySelectorAll('.item')].map(el => el.getAttribute('data-id'));
+        async function saveOrder() {
             try {
-                const response = await fetch('', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ action: 'reorder', items, csrf_token: csrfToken })
-                });
-                if (!response.ok) throw new Error('Network error');
+                await api('reorder', { items: currentOrder() });
             } catch (error) {
-                console.error('Failed to update order:', error);
+                showToast(error.message);
             }
         }
 
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
-
-        // Setup drag and drop for existing items
-        document.querySelectorAll('.item').forEach(setupDragAndDrop);
-
-        // Clear buttons
         document.getElementById('clearChecked').addEventListener('click', async () => {
-            if (confirm('Clear all checked items?')) {
-                try {
-                    const response = await fetch('', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ action: 'clear_checked', csrf_token: csrfToken })
-                    });
-                    if (!response.ok) throw new Error('Network error');
-                    document.querySelectorAll('.item.checked').forEach(item => item.remove());
-                } catch (error) {
-                    console.error('Failed to clear checked items:', error);
-                }
+            if (!confirm('Clear checked items?')) {
+                return;
+            }
+
+            try {
+                await api('clear_checked');
+                itemsList.querySelectorAll('.item.checked').forEach(item => item.remove());
+                updateCount();
+            } catch (error) {
+                showToast(error.message);
             }
         });
 
         document.getElementById('clearAll').addEventListener('click', async () => {
-            if (confirm('Clear all items? This cannot be undone.')) {
-                try {
-                    const response = await fetch('', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ action: 'clear_all', csrf_token: csrfToken })
-                    });
-                    if (!response.ok) throw new Error('Network error');
-                    itemsList.innerHTML = '';
-                } catch (error) {
-                    console.error('Failed to clear all items:', error);
-                }
+            if (!confirm('Clear all items?')) {
+                return;
+            }
+
+            try {
+                await api('clear_all');
+                itemsList.replaceChildren();
+                updateCount();
+            } catch (error) {
+                showToast(error.message);
             }
         });
+
+        document.getElementById('exportMarkdown').addEventListener('click', async () => {
+            const lines = [...itemsList.querySelectorAll('.item')].map(item => {
+                const checked = item.querySelector('.item-checkbox').checked ? 'x' : ' ';
+                const text = item.querySelector('.item-text').textContent.trim();
+                return `- [${checked}] ${text}`;
+            });
+
+            try {
+                await navigator.clipboard.writeText(lines.join('\n') + (lines.length ? '\n' : ''));
+                showToast('Markdown copied');
+            } catch (error) {
+                showToast('Clipboard is not available');
+            }
+        });
+
+        let refreshTimeout;
+        function queueRefresh() {
+            clearTimeout(refreshTimeout);
+            refreshTimeout = setTimeout(refreshList, 250);
+        }
+
+        window.addEventListener('focus', queueRefresh);
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) {
+                queueRefresh();
+            }
+        });
+
+        document.querySelectorAll('.item').forEach(setupDragAndDrop);
+        updateCount();
     </script>
 </body>
 </html>

@@ -1,6 +1,6 @@
 # getme
 
-A dead-simple, self-hosted grocery list. One PHP file. One SQLite database. That's it.
+A dead-simple, self-hosted grocery list. One PHP file. One SQLite database. Anyone with the URL can use it.
 
 ## Why?
 
@@ -17,7 +17,8 @@ Because sometimes you just need a grocery list that:
 - Drag-and-drop reordering (works on mobile too)
 - Dark mode
 - Syncs across devices automatically
-- Simple API for external integrations
+- Copy the list as Markdown
+- Open JSON API for external integrations
 
 ## Installation
 
@@ -34,19 +35,17 @@ The SQLite database (`grocery.db`) is created automatically on first run.
 
 ## API
 
-External apps can add items via POST:
+External apps can add items via POST. The older `add_item` action is still accepted as an alias for `add`.
 
 ```bash
 curl -X POST https://your-server/grocery/ \
   -H "Content-Type: application/json" \
-  -d '{"action": "add_item", "name": "Milk"}'
+  -d '{"action": "add", "name": "Milk"}'
 ```
 
 ## Security Notes
 
-- CSRF protection is built-in for browser requests
-- Consider placing behind authentication if exposed to the internet
-- The `add_item` API endpoint is open by design (for external integrations)
+This is intentionally unauthenticated. Anyone who can reach the URL can add, edit, reorder, check, and delete items.
 
 ## License
 
