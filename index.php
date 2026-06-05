@@ -249,15 +249,8 @@ $items = all_items($db);
             font-weight: 750;
         }
 
-        .count {
-            margin-top: 4px;
-            color: var(--muted);
-            font-size: 14px;
-        }
-
         .icon-btn,
-        .item-action,
-        .drag-handle {
+        .item-action {
             display: inline-grid;
             place-items: center;
             width: 42px;
@@ -269,8 +262,7 @@ $items = all_items($db);
         }
 
         .icon-btn:hover,
-        .item-action:hover,
-        .drag-handle:hover {
+        .item-action:hover {
             background: var(--surface-strong);
         }
 
@@ -325,7 +317,7 @@ $items = all_items($db);
 
         .item {
             display: grid;
-            grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+            grid-template-columns: auto minmax(0, 1fr) auto;
             align-items: center;
             gap: 8px;
             min-height: 60px;
@@ -335,12 +327,15 @@ $items = all_items($db);
             background: var(--surface);
             box-shadow: var(--shadow);
             transition: opacity 0.15s, transform 0.15s, border-color 0.15s;
+            cursor: grab;
+            touch-action: none;
         }
 
         .item.dragging,
         .item.touch-dragging {
             opacity: 0.7;
             border-color: var(--accent);
+            cursor: grabbing;
         }
 
         .item.checked {
@@ -380,14 +375,13 @@ $items = all_items($db);
             text-decoration: none;
         }
 
-        .drag-handle {
-            color: var(--muted);
-            touch-action: none;
-            cursor: grab;
+        .item.editing {
+            cursor: default;
+            touch-action: auto;
         }
 
-        .drag-handle:active {
-            cursor: grabbing;
+        .item.checked .item-text.editing {
+            text-decoration: none;
         }
 
         .item-action {
@@ -395,7 +389,12 @@ $items = all_items($db);
         }
 
         .item-action.delete {
+            display: none;
             color: var(--danger);
+        }
+
+        .item.editing .item-action.delete {
+            display: inline-grid;
         }
 
         .bulk-actions {
@@ -468,13 +467,12 @@ $items = all_items($db);
             }
 
             .item {
-                grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+                grid-template-columns: auto minmax(0, 1fr) auto;
                 gap: 6px;
             }
 
             .icon-btn,
-            .item-action,
-            .drag-handle {
+            .item-action {
                 width: 40px;
                 height: 40px;
             }
@@ -490,7 +488,6 @@ $items = all_items($db);
         <header class="topbar">
             <div>
                 <h1><?= e($listName) ?></h1>
-                <div class="count" id="itemCount"></div>
             </div>
             <button class="icon-btn" id="themeToggle" type="button" aria-label="Toggle dark mode" title="Toggle dark mode">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M21.64 13a1 1 0 0 0-1.05-.14 8.05 8.05 0 0 1-3.37.73 8.15 8.15 0 0 1-8.14-8.1 8.59 8.59 0 0 1 .25-2A1 1 0 0 0 8 2.36 10.14 10.14 0 1 0 22 14.05 1 1 0 0 0 21.64 13Z"/></svg>
@@ -504,15 +501,9 @@ $items = all_items($db);
 
         <ul class="items-list" id="itemsList">
             <?php foreach ($items as $item): ?>
-                <li class="item <?= (int) $item['checked'] ? 'checked' : '' ?>" data-id="<?= (int) $item['id'] ?>" draggable="true">
-                    <button class="drag-handle" type="button" aria-label="Drag item" title="Drag item">
-                        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M9 5a2 2 0 1 1-4 0 2 2 0 0 1 4 0Zm10 0a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM9 12a2 2 0 1 1-4 0 2 2 0 0 1 4 0Zm10 0a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM9 19a2 2 0 1 1-4 0 2 2 0 0 1 4 0Zm10 0a2 2 0 1 1-4 0 2 2 0 0 1 4 0Z"/></svg>
-                    </button>
+                <li class="item <?= (int) $item['checked'] ? 'checked' : '' ?>" data-id="<?= (int) $item['id'] ?>">
                     <input type="checkbox" class="item-checkbox" aria-label="Toggle item" <?= (int) $item['checked'] ? 'checked' : '' ?>>
                     <span class="item-text" contenteditable="false"><?= e($item['name']) ?></span>
-                    <button class="item-action edit" type="button" aria-label="Edit item" title="Edit item">
-                        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 17.46V20h2.54L17.96 8.58l-2.54-2.54L4 17.46ZM19.71 6.83a1 1 0 0 0 0-1.41l-1.13-1.13a1 1 0 0 0-1.41 0l-.88.88 2.54 2.54.88-.88Z"/></svg>
-                    </button>
                     <button class="item-action delete" type="button" aria-label="Delete item" title="Delete item">
                         <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V7H6v12ZM8 4l1-1h6l1 1h4v2H4V4h4Z"/></svg>
                     </button>
@@ -533,18 +524,16 @@ $items = all_items($db);
         const itemsList = document.getElementById('itemsList');
         const addForm = document.getElementById('addForm');
         const newItemInput = document.getElementById('newItem');
-        const itemCount = document.getElementById('itemCount');
         const themeToggle = document.getElementById('themeToggle');
         const toast = document.getElementById('toast');
 
         const icons = {
-            drag: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M9 5a2 2 0 1 1-4 0 2 2 0 0 1 4 0Zm10 0a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM9 12a2 2 0 1 1-4 0 2 2 0 0 1 4 0Zm10 0a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM9 19a2 2 0 1 1-4 0 2 2 0 0 1 4 0Zm10 0a2 2 0 1 1-4 0 2 2 0 0 1 4 0Z"/></svg>',
-            edit: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 17.46V20h2.54L17.96 8.58l-2.54-2.54L4 17.46ZM19.71 6.83a1 1 0 0 0 0-1.41l-1.13-1.13a1 1 0 0 0-1.41 0l-.88.88 2.54 2.54.88-.88Z"/></svg>',
             delete: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V7H6v12ZM8 4l1-1h6l1 1h4v2H4V4h4Z"/></svg>'
         };
 
         let toastTimeout;
         let dragState = null;
+        let pendingDrag = null;
 
         function showToast(message) {
             toast.textContent = message;
@@ -575,10 +564,8 @@ $items = all_items($db);
         function itemTemplate(item) {
             const checked = Number(item.checked) === 1;
             return `
-                <button class="drag-handle" type="button" aria-label="Drag item" title="Drag item">${icons.drag}</button>
                 <input type="checkbox" class="item-checkbox" aria-label="Toggle item" ${checked ? 'checked' : ''}>
                 <span class="item-text" contenteditable="false">${escapeHtml(item.name)}</span>
-                <button class="item-action edit" type="button" aria-label="Edit item" title="Edit item">${icons.edit}</button>
                 <button class="item-action delete" type="button" aria-label="Delete item" title="Delete item">${icons.delete}</button>
             `;
         }
@@ -587,7 +574,6 @@ $items = all_items($db);
             const element = document.createElement('li');
             element.className = 'item' + (Number(item.checked) === 1 ? ' checked' : '');
             element.dataset.id = item.id;
-            element.draggable = true;
             element.innerHTML = itemTemplate(item);
             setupDragAndDrop(element);
             return element;
@@ -595,11 +581,7 @@ $items = all_items($db);
 
         function updateCount() {
             const items = [...itemsList.querySelectorAll('.item')];
-            const open = items.filter(item => !item.classList.contains('checked')).length;
             const total = items.length;
-            itemCount.textContent = total === 0
-                ? '0 items'
-                : `${open} to get, ${total} total`;
             document.querySelector('.empty-state').classList.toggle('visible', total === 0);
         }
 
@@ -673,13 +655,7 @@ $items = all_items($db);
         });
 
         itemsList.addEventListener('click', async event => {
-            const editButton = event.target.closest('.edit');
             const deleteButton = event.target.closest('.delete');
-
-            if (editButton) {
-                startEditing(editButton.closest('.item'));
-                return;
-            }
 
             if (deleteButton) {
                 const item = deleteButton.closest('.item');
@@ -693,9 +669,15 @@ $items = all_items($db);
             }
         });
 
+        itemsList.addEventListener('pointerdown', event => {
+            if (event.target.closest('.delete')) {
+                event.preventDefault();
+            }
+        });
+
         itemsList.addEventListener('dblclick', event => {
             const item = event.target.closest('.item');
-            if (item && event.target.classList.contains('item-text')) {
+            if (item && !event.target.closest('button, input')) {
                 startEditing(item);
             }
         });
@@ -709,6 +691,7 @@ $items = all_items($db);
             const original = text.textContent;
             text.contentEditable = 'true';
             text.classList.add('editing');
+            item.classList.add('editing');
             text.focus();
 
             const range = document.createRange();
@@ -722,6 +705,7 @@ $items = all_items($db);
                 text.removeEventListener('blur', onBlur);
                 text.contentEditable = 'false';
                 text.classList.remove('editing');
+                item.classList.remove('editing');
 
                 const next = text.textContent.trim();
                 if (!save || next === '') {
@@ -757,9 +741,8 @@ $items = all_items($db);
         }
 
         function setupDragAndDrop(element) {
-            const handle = element.querySelector('.drag-handle');
             element.draggable = false;
-            handle.addEventListener('pointerdown', startPointerDrag);
+            element.addEventListener('pointerdown', startPointerDrag);
         }
 
         function dragAfterElement(y, selector) {
@@ -809,16 +792,30 @@ $items = all_items($db);
         }
 
         function startPointerDrag(event) {
-            if (dragState || event.button !== 0) {
+            if (dragState || pendingDrag || event.button !== 0) {
                 return;
             }
 
             const item = event.target.closest('.item');
-            if (!item) {
+            if (!item || item.classList.contains('editing') || event.target.closest('button, input')) {
                 return;
             }
 
-            event.preventDefault();
+            pendingDrag = {
+                item,
+                pointerId: event.pointerId,
+                startX: event.clientX,
+                startY: event.clientY
+            };
+
+            item.setPointerCapture(event.pointerId);
+            item.addEventListener('pointermove', movePointerDrag);
+            item.addEventListener('pointerup', endPointerDrag, { once: true });
+            item.addEventListener('pointercancel', cancelPointerDrag, { once: true });
+        }
+
+        function beginPointerDrag(event) {
+            const item = pendingDrag.item;
 
             const rect = item.getBoundingClientRect();
             const originalNextSibling = item.nextElementSibling;
@@ -845,14 +842,20 @@ $items = all_items($db);
                 pointerEvents: 'none'
             });
             item.classList.add('touch-dragging');
-
-            event.currentTarget.setPointerCapture(event.pointerId);
-            event.currentTarget.addEventListener('pointermove', movePointerDrag);
-            event.currentTarget.addEventListener('pointerup', endPointerDrag, { once: true });
-            event.currentTarget.addEventListener('pointercancel', cancelPointerDrag, { once: true });
+            pendingDrag = null;
         }
 
         function movePointerDrag(event) {
+            if (pendingDrag && event.pointerId === pendingDrag.pointerId) {
+                const deltaX = event.clientX - pendingDrag.startX;
+                const deltaY = event.clientY - pendingDrag.startY;
+                if (Math.hypot(deltaX, deltaY) < 6) {
+                    return;
+                }
+                event.preventDefault();
+                beginPointerDrag(event);
+            }
+
             if (!dragState || event.pointerId !== dragState.pointerId) {
                 return;
             }
@@ -864,6 +867,8 @@ $items = all_items($db);
         }
 
         function finishPointerDrag(save) {
+            pendingDrag = null;
+
             if (!dragState) {
                 return;
             }
