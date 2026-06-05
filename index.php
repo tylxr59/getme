@@ -605,6 +605,11 @@ $items = all_items($db);
             return [...itemsList.querySelectorAll('.item')].map(item => item.dataset.id);
         }
 
+        function appendToUncheckedItems(item) {
+            const firstCheckedItem = itemsList.querySelector('.item.checked');
+            firstCheckedItem ? firstCheckedItem.before(item) : itemsList.appendChild(item);
+        }
+
         async function refreshList() {
             try {
                 const data = await api('fetch');
@@ -636,7 +641,7 @@ $items = all_items($db);
             newItemInput.value = '';
             try {
                 const data = await api('add', { name });
-                itemsList.appendChild(createItemElement(data.item));
+                appendToUncheckedItems(createItemElement(data.item));
                 updateCount();
             } catch (error) {
                 newItemInput.value = name;
