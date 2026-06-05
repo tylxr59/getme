@@ -266,47 +266,6 @@ $items = all_items($db);
             background: var(--surface-strong);
         }
 
-        .add-form {
-            position: sticky;
-            top: 0;
-            z-index: 10;
-            display: grid;
-            grid-template-columns: 1fr auto;
-            gap: 8px;
-            padding: 10px 0 14px;
-            background: var(--bg);
-        }
-
-        .add-form input {
-            min-width: 0;
-            height: 48px;
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 0 14px;
-            background: var(--surface);
-            color: var(--text);
-            font-size: 16px;
-        }
-
-        .add-form input:focus {
-            outline: 3px solid var(--accent-focus);
-            border-color: var(--accent);
-        }
-
-        .add-form button {
-            height: 48px;
-            min-width: 84px;
-            border: 0;
-            border-radius: 8px;
-            background: var(--accent);
-            color: #ffffff;
-            font-weight: 700;
-        }
-
-        .add-form button:hover {
-            background: var(--accent-strong);
-        }
-
         .items-list {
             display: grid;
             gap: 8px;
@@ -489,15 +448,10 @@ $items = all_items($db);
             <div>
                 <h1><?= e($listName) ?></h1>
             </div>
-            <button class="icon-btn" id="themeToggle" type="button" aria-label="Toggle dark mode" title="Toggle dark mode">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M21.64 13a1 1 0 0 0-1.05-.14 8.05 8.05 0 0 1-3.37.73 8.15 8.15 0 0 1-8.14-8.1 8.59 8.59 0 0 1 .25-2A1 1 0 0 0 8 2.36 10.14 10.14 0 1 0 22 14.05 1 1 0 0 0 21.64 13Z"/></svg>
+            <button class="icon-btn" id="addItem" type="button" aria-label="Add item" title="Add item">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M19 11h-6V5h-2v6H5v2h6v6h2v-6h6v-2Z"/></svg>
             </button>
         </header>
-
-        <form class="add-form" id="addForm">
-            <input type="text" id="newItem" name="name" placeholder="Add an item" autocomplete="off" maxlength="160">
-            <button type="submit">Add</button>
-        </form>
 
         <ul class="items-list" id="itemsList">
             <?php foreach ($items as $item): ?>
@@ -522,9 +476,7 @@ $items = all_items($db);
 
     <script>
         const itemsList = document.getElementById('itemsList');
-        const addForm = document.getElementById('addForm');
-        const newItemInput = document.getElementById('newItem');
-        const themeToggle = document.getElementById('themeToggle');
+        const addItemButton = document.getElementById('addItem');
         const toast = document.getElementById('toast');
 
         const icons = {
@@ -563,8 +515,9 @@ $items = all_items($db);
 
         function itemTemplate(item) {
             const checked = Number(item.checked) === 1;
+            const disabled = item.id ? '' : ' disabled';
             return `
-                <input type="checkbox" class="item-checkbox" aria-label="Toggle item" ${checked ? 'checked' : ''}>
+                <input type="checkbox" class="item-checkbox" aria-label="Toggle item" ${checked ? 'checked' : ''}${disabled}>
                 <span class="item-text" contenteditable="false">${escapeHtml(item.name)}</span>
                 <button class="item-action delete" type="button" aria-label="Delete item" title="Delete item">${icons.delete}</button>
             `;
@@ -573,7 +526,9 @@ $items = all_items($db);
         function createItemElement(item) {
             const element = document.createElement('li');
             element.className = 'item' + (Number(item.checked) === 1 ? ' checked' : '');
-            element.dataset.id = item.id;
+            if (item.id) {
+                element.dataset.id = item.id;
+            }
             element.innerHTML = itemTemplate(item);
             setupDragAndDrop(element);
             return element;
@@ -604,33 +559,18 @@ $items = all_items($db);
             }
         }
 
-        function applyTheme(theme) {
-            document.documentElement.dataset.theme = theme;
-            localStorage.setItem('theme', theme);
-        }
-
-        applyTheme(localStorage.getItem('theme') || 'light');
-
-        themeToggle.addEventListener('click', () => {
-            applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
-        });
-
-        addForm.addEventListener('submit', async event => {
-            event.preventDefault();
-            const name = newItemInput.value.trim();
-            if (!name) {
+        addItemButton.addEventListener('click', () => {
+            const pendingItem = itemsList.querySelector('.item.new-item');
+            if (pendingItem) {
+                startEditing(pendingItem);
                 return;
             }
 
-            newItemInput.value = '';
-            try {
-                const data = await api('add', { name });
-                appendToUncheckedItems(createItemElement(data.item));
-                updateCount();
-            } catch (error) {
-                newItemInput.value = name;
-                showToast(error.message);
-            }
+            const item = createItemElement({ id: null, name: '', checked: 0 });
+            item.classList.add('new-item');
+            appendToUncheckedItems(item);
+            updateCount();
+            startEditing(item);
         });
 
         itemsList.addEventListener('change', async event => {
@@ -659,6 +599,12 @@ $items = all_items($db);
 
             if (deleteButton) {
                 const item = deleteButton.closest('.item');
+                if (!item.dataset.id) {
+                    item.remove();
+                    updateCount();
+                    return;
+                }
+
                 try {
                     await api('delete', { id: item.dataset.id });
                     item.remove();
@@ -685,9 +631,11 @@ $items = all_items($db);
         function startEditing(item) {
             const text = item.querySelector('.item-text');
             if (text.classList.contains('editing')) {
+                text.focus();
                 return;
             }
 
+            const isNew = !item.dataset.id;
             const original = text.textContent;
             text.contentEditable = 'true';
             text.classList.add('editing');
@@ -709,17 +657,37 @@ $items = all_items($db);
 
                 const next = text.textContent.trim();
                 if (!save || next === '') {
-                    text.textContent = original;
+                    if (isNew) {
+                        item.remove();
+                        updateCount();
+                    } else {
+                        text.textContent = original;
+                    }
                     return;
                 }
-                if (next === original) {
+                if (!isNew && next === original) {
                     return;
                 }
 
                 try {
-                    await api('edit', { id: item.dataset.id, name: next });
+                    if (isNew) {
+                        const data = await api('add', { name: next });
+                        item.dataset.id = data.item.id;
+                        item.classList.remove('new-item');
+                        item.querySelector('.item-checkbox').disabled = false;
+                        text.textContent = data.item.name;
+                        await api('reorder', { items: currentOrder() });
+                    } else {
+                        await api('edit', { id: item.dataset.id, name: next });
+                    }
                 } catch (error) {
-                    text.textContent = original;
+                    if (isNew) {
+                        item.classList.add('new-item');
+                        text.textContent = next;
+                        setTimeout(() => startEditing(item), 0);
+                    } else {
+                        text.textContent = original;
+                    }
                     showToast(error.message);
                 }
             };
