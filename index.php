@@ -190,21 +190,23 @@ $items = all_items($db);
             --shadow: 0 12px 32px rgba(20, 44, 38, 0.08);
         }
 
-        [data-theme="dark"] {
-            color-scheme: dark;
-            --bg: #161616;
-            --surface: #222222;
-            --surface-strong: #2d2d2d;
-            --text: #f1f1ee;
-            --muted: #aaa59c;
-            --border: #44413c;
-            --accent: #45b897;
-            --accent-strong: #69c8ad;
-            --accent-focus: rgba(69, 184, 151, 0.25);
-            --danger: #ff7878;
-            --danger-border: #b35d5d;
-            --soft: rgba(34, 34, 34, 0.68);
-            --shadow: 0 12px 32px rgba(0, 0, 0, 0.24);
+        @media (prefers-color-scheme: dark) {
+            :root {
+                color-scheme: dark;
+                --bg: #161616;
+                --surface: #222222;
+                --surface-strong: #2d2d2d;
+                --text: #f1f1ee;
+                --muted: #aaa59c;
+                --border: #44413c;
+                --accent: #45b897;
+                --accent-strong: #69c8ad;
+                --accent-focus: rgba(69, 184, 151, 0.25);
+                --danger: #ff7878;
+                --danger-border: #b35d5d;
+                --soft: rgba(34, 34, 34, 0.68);
+                --shadow: 0 12px 32px rgba(0, 0, 0, 0.24);
+            }
         }
 
         * {
