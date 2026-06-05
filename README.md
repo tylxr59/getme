@@ -1,12 +1,12 @@
 # getme
 
-A dead-simple, self-hosted grocery list. One PHP file. One SQLite database. Anyone with the URL can use it.
+A dead-simple, self-hosted list app. One PHP file. One SQLite database. Anyone with the URL can use it.
 
 getme also has a Pebble companion app: [getme for Pebble](https://github.com/tylxr59/getme-for-pebble).
 
 ## Why?
 
-Because sometimes you just need a grocery list that:
+Because sometimes you just need a list that:
 - Works on any device with a browser
 - Doesn't require an account
 - Doesn't track you
@@ -54,7 +54,7 @@ All requests are `POST` with `Content-Type: application/json`. CORS preflight re
 Fetch the current list:
 
 ```bash
-curl -X POST https://your-server/grocery/ \
+curl -X POST https://your-server/getme/ \
   -H "Content-Type: application/json" \
   -d '{"action": "fetch"}'
 ```
@@ -73,7 +73,7 @@ Response:
 Add an item. The older `add_item` action is still accepted as an alias for `add`.
 
 ```bash
-curl -X POST https://your-server/grocery/ \
+curl -X POST https://your-server/getme/ \
   -H "Content-Type: application/json" \
   -d '{"action": "add", "name": "Milk"}'
 ```
@@ -81,7 +81,7 @@ curl -X POST https://your-server/grocery/ \
 Toggle an item:
 
 ```bash
-curl -X POST https://your-server/grocery/ \
+curl -X POST https://your-server/getme/ \
   -H "Content-Type: application/json" \
   -d '{"action": "toggle", "id": 1, "checked": 1}'
 ```
@@ -89,7 +89,7 @@ curl -X POST https://your-server/grocery/ \
 Clear checked items:
 
 ```bash
-curl -X POST https://your-server/grocery/ \
+curl -X POST https://your-server/getme/ \
   -H "Content-Type: application/json" \
   -d '{"action": "clear_checked"}'
 ```
@@ -97,7 +97,3 @@ curl -X POST https://your-server/grocery/ \
 ## Security Notes
 
 This is intentionally unauthenticated. Anyone who can reach the URL can add, edit, reorder, check, and delete items.
-
-## License
-
-MIT Licensed. Fork, remix, and reuse as you see fit.
