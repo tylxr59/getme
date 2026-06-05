@@ -345,6 +345,12 @@ $items = all_items($db);
             opacity: 0.62;
         }
 
+        .item.reorder-placeholder {
+            box-shadow: none;
+            opacity: 0.35;
+            pointer-events: none;
+        }
+
         .item-checkbox {
             width: 24px;
             height: 24px;
@@ -536,10 +542,7 @@ $items = all_items($db);
         };
 
         let toastTimeout;
-        let draggedElement = null;
-        let touchDragElement = null;
-        let touchOffsetY = 0;
-        let placeholder = null;
+        let dragState = null;
 
         function showToast(message) {
             toast.textContent = message;
@@ -747,33 +750,9 @@ $items = all_items($db);
         }
 
         function setupDragAndDrop(element) {
-            element.addEventListener('dragstart', event => {
-                if (!event.target.closest('.drag-handle')) {
-                    event.preventDefault();
-                    return;
-                }
-
-                draggedElement = element;
-                element.classList.add('dragging');
-                event.dataTransfer.effectAllowed = 'move';
-            });
-
-            element.addEventListener('dragover', event => {
-                event.preventDefault();
-                const after = dragAfterElement(event.clientY, '.item:not(.dragging)');
-                after ? after.before(draggedElement) : itemsList.appendChild(draggedElement);
-            });
-
-            element.addEventListener('dragend', () => {
-                element.classList.remove('dragging');
-                draggedElement = null;
-                saveOrder();
-            });
-
             const handle = element.querySelector('.drag-handle');
-            handle.addEventListener('touchstart', startTouchDrag, { passive: false });
-            handle.addEventListener('touchmove', moveTouchDrag, { passive: false });
-            handle.addEventListener('touchend', endTouchDrag);
+            element.draggable = false;
+            handle.addEventListener('pointerdown', startPointerDrag);
         }
 
         function dragAfterElement(y, selector) {
@@ -784,57 +763,140 @@ $items = all_items($db);
             }, { offset: Number.NEGATIVE_INFINITY }).element;
         }
 
-        function startTouchDrag(event) {
+        function captureItemPositions() {
+            const positions = new Map();
+            itemsList.querySelectorAll('.item:not(.touch-dragging)').forEach(item => {
+                positions.set(item, item.getBoundingClientRect());
+            });
+            return positions;
+        }
+
+        function animateMovedItems(previousPositions) {
+            itemsList.querySelectorAll('.item:not(.touch-dragging)').forEach(item => {
+                const previous = previousPositions.get(item);
+                if (!previous) {
+                    return;
+                }
+
+                const next = item.getBoundingClientRect();
+                const deltaY = previous.top - next.top;
+                if (Math.abs(deltaY) < 1) {
+                    return;
+                }
+
+                item.animate([
+                    { transform: `translateY(${deltaY}px)` },
+                    { transform: 'translateY(0)' }
+                ], {
+                    duration: 150,
+                    easing: 'ease-out'
+                });
+            });
+        }
+
+        function movePlaceholder(y) {
+            const previousPositions = captureItemPositions();
+            const after = dragAfterElement(y, '.item:not(.touch-dragging):not(.reorder-placeholder)');
+            after ? after.before(dragState.placeholder) : itemsList.appendChild(dragState.placeholder);
+            animateMovedItems(previousPositions);
+        }
+
+        function startPointerDrag(event) {
+            if (dragState || event.button !== 0) {
+                return;
+            }
+
+            const item = event.target.closest('.item');
+            if (!item) {
+                return;
+            }
+
             event.preventDefault();
-            touchDragElement = event.target.closest('.item');
-            const touch = event.touches[0];
-            const rect = touchDragElement.getBoundingClientRect();
-            touchOffsetY = touch.clientY - rect.top;
 
-            placeholder = document.createElement('li');
-            placeholder.className = 'item';
+            const rect = item.getBoundingClientRect();
+            const originalNextSibling = item.nextElementSibling;
+            const placeholder = item.cloneNode(false);
+            placeholder.className = item.className.replace(/\btouch-dragging\b/g, '').trim() + ' reorder-placeholder';
             placeholder.style.height = `${rect.height}px`;
-            placeholder.style.opacity = '0';
-            touchDragElement.after(placeholder);
+            item.after(placeholder);
 
-            Object.assign(touchDragElement.style, {
+            dragState = {
+                item,
+                placeholder,
+                originalNextSibling,
+                pointerId: event.pointerId,
+                offsetX: event.clientX - rect.left,
+                offsetY: event.clientY - rect.top
+            };
+
+            Object.assign(item.style, {
                 position: 'fixed',
                 width: `${rect.width}px`,
                 left: `${rect.left}px`,
                 top: `${rect.top}px`,
-                zIndex: '1000'
+                zIndex: '1000',
+                pointerEvents: 'none'
             });
-            touchDragElement.classList.add('touch-dragging');
+            item.classList.add('touch-dragging');
+
+            event.currentTarget.setPointerCapture(event.pointerId);
+            event.currentTarget.addEventListener('pointermove', movePointerDrag);
+            event.currentTarget.addEventListener('pointerup', endPointerDrag, { once: true });
+            event.currentTarget.addEventListener('pointercancel', cancelPointerDrag, { once: true });
         }
 
-        function moveTouchDrag(event) {
-            if (!touchDragElement) {
+        function movePointerDrag(event) {
+            if (!dragState || event.pointerId !== dragState.pointerId) {
                 return;
             }
+
             event.preventDefault();
-            const touch = event.touches[0];
-            touchDragElement.style.top = `${touch.clientY - touchOffsetY}px`;
-            const after = dragAfterElement(touch.clientY, '.item:not(.touch-dragging)');
-            after ? after.before(placeholder) : itemsList.appendChild(placeholder);
+            dragState.item.style.left = `${event.clientX - dragState.offsetX}px`;
+            dragState.item.style.top = `${event.clientY - dragState.offsetY}px`;
+            movePlaceholder(event.clientY);
         }
 
-        function endTouchDrag() {
-            if (!touchDragElement) {
+        function finishPointerDrag(save) {
+            if (!dragState) {
                 return;
             }
 
-            Object.assign(touchDragElement.style, {
+            const { item, placeholder, originalNextSibling } = dragState;
+            Object.assign(item.style, {
                 position: '',
                 width: '',
                 left: '',
                 top: '',
-                zIndex: ''
+                zIndex: '',
+                pointerEvents: ''
             });
-            touchDragElement.classList.remove('touch-dragging');
-            placeholder.replaceWith(touchDragElement);
-            placeholder = null;
-            touchDragElement = null;
-            saveOrder();
+            item.classList.remove('touch-dragging');
+            if (save) {
+                placeholder.replaceWith(item);
+            } else {
+                placeholder.remove();
+                if (originalNextSibling && originalNextSibling.parentNode === itemsList) {
+                    itemsList.insertBefore(item, originalNextSibling);
+                } else {
+                    itemsList.appendChild(item);
+                }
+            }
+            dragState = null;
+            updateCount();
+
+            if (save) {
+                saveOrder();
+            }
+        }
+
+        function endPointerDrag(event) {
+            event.currentTarget.removeEventListener('pointermove', movePointerDrag);
+            finishPointerDrag(true);
+        }
+
+        function cancelPointerDrag(event) {
+            event.currentTarget.removeEventListener('pointermove', movePointerDrag);
+            finishPointerDrag(false);
         }
 
         async function saveOrder() {
