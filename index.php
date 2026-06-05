@@ -1,5 +1,6 @@
 <?php
 $listName = 'getme';
+$databasePath = __DIR__ . '/getme.db';
 
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: POST, OPTIONS');
@@ -10,7 +11,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit;
 }
 
-$db = new PDO('sqlite:' . __DIR__ . '/getme.db');
+$db = new PDO('sqlite:' . $databasePath);
 $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 $db->exec('PRAGMA foreign_keys = ON');
 
@@ -495,7 +496,7 @@ $items = all_items($db);
                 </li>
             <?php endforeach; ?>
         </ul>
-        <div class="empty-state">No groceries yet.</div>
+        <div class="empty-state">No items yet.</div>
 
     </main>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>

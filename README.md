@@ -17,8 +17,8 @@ Because sometimes you just need a list that:
 - Add, edit, and delete items
 - Check off items (they move to the bottom)
 - Drag-and-drop reordering (works on mobile too)
-- Dark mode
-- Syncs across devices automatically
+- System dark mode
+- Refreshes when you return to the tab
 - Copy the list as Markdown
 - Open JSON API for external integrations
 - Pebble watch integration through getme for Pebble
@@ -36,7 +36,7 @@ Because sometimes you just need a list that:
 
 The SQLite database (`getme.db`) is created automatically on first run.
 
-To rename the list, edit `$listName` near the top of `index.php`.
+To rename the list, edit `$listName` near the top of `index.php`. To move the database outside the web directory, edit `$databasePath`.
 
 ## Requirements
 
@@ -78,12 +78,36 @@ curl -X POST https://your-server/getme/ \
   -d '{"action": "add", "name": "Milk"}'
 ```
 
+Edit an item:
+
+```bash
+curl -X POST https://your-server/getme/ \
+  -H "Content-Type: application/json" \
+  -d '{"action": "edit", "id": 1, "name": "Oat milk"}'
+```
+
 Toggle an item:
 
 ```bash
 curl -X POST https://your-server/getme/ \
   -H "Content-Type: application/json" \
   -d '{"action": "toggle", "id": 1, "checked": 1}'
+```
+
+Reorder items:
+
+```bash
+curl -X POST https://your-server/getme/ \
+  -H "Content-Type: application/json" \
+  -d '{"action": "reorder", "items": [2, 1, 3]}'
+```
+
+Delete an item:
+
+```bash
+curl -X POST https://your-server/getme/ \
+  -H "Content-Type: application/json" \
+  -d '{"action": "delete", "id": 1}'
 ```
 
 Clear checked items:
@@ -94,6 +118,16 @@ curl -X POST https://your-server/getme/ \
   -d '{"action": "clear_checked"}'
 ```
 
+Clear all items:
+
+```bash
+curl -X POST https://your-server/getme/ \
+  -H "Content-Type: application/json" \
+  -d '{"action": "clear_all"}'
+```
+
 ## Security Notes
 
 This is intentionally unauthenticated. Anyone who can reach the URL can add, edit, reorder, check, and delete items.
+
+If you leave the default database path in place, configure your web server not to serve `getme.db` directly. A safer option is to set `$databasePath` to a location outside the web root.
