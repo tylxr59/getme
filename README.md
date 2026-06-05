@@ -34,7 +34,9 @@ Because sometimes you just need a grocery list that:
 2. Make sure the directory is writable (for the SQLite database)
 3. Open it in your browser
 
-The SQLite database (`grocery.db`) is created automatically on first run.
+The SQLite database (`getme.db`) is created automatically on first run.
+
+To rename the list, edit `$listName` near the top of `index.php`.
 
 ## Requirements
 

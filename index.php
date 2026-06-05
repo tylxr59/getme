@@ -1,4 +1,6 @@
 <?php
+$listName = 'getme';
+
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: POST, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type');
@@ -8,7 +10,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit;
 }
 
-$db = new PDO('sqlite:' . __DIR__ . '/grocery.db');
+$db = new PDO('sqlite:' . __DIR__ . '/getme.db');
 $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 $db->exec('PRAGMA foreign_keys = ON');
 
@@ -169,7 +171,7 @@ $items = all_items($db);
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Grocery List</title>
+    <title><?= e($listName) ?></title>
     <style>
         :root {
             color-scheme: light;
@@ -487,7 +489,7 @@ $items = all_items($db);
     <main class="app">
         <header class="topbar">
             <div>
-                <h1>Grocery List</h1>
+                <h1><?= e($listName) ?></h1>
                 <div class="count" id="itemCount"></div>
             </div>
             <button class="icon-btn" id="themeToggle" type="button" aria-label="Toggle dark mode" title="Toggle dark mode">
