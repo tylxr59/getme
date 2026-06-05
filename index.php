@@ -251,6 +251,13 @@ $items = all_items($db);
             font-weight: 750;
         }
 
+        .header-actions {
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
         .icon-btn,
         .item-action {
             display: inline-grid;
@@ -266,6 +273,46 @@ $items = all_items($db);
         .icon-btn:hover,
         .item-action:hover {
             background: var(--surface-strong);
+        }
+
+        .menu-popover {
+            position: absolute;
+            top: calc(100% + 8px);
+            right: 0;
+            z-index: 20;
+            display: none;
+            min-width: 180px;
+            padding: 6px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--surface);
+            box-shadow: var(--shadow);
+        }
+
+        .menu-popover.visible {
+            display: grid;
+            gap: 2px;
+        }
+
+        .menu-popover button {
+            width: 100%;
+            min-height: 40px;
+            padding: 0 10px;
+            border: 0;
+            border-radius: 6px;
+            background: transparent;
+            color: var(--text);
+            text-align: left;
+        }
+
+        .menu-popover button:hover,
+        .menu-popover button:focus {
+            background: var(--surface-strong);
+            outline: 0;
+        }
+
+        .menu-popover .danger {
+            color: var(--danger);
         }
 
         .items-list {
@@ -358,30 +405,6 @@ $items = all_items($db);
             display: inline-grid;
         }
 
-        .bulk-actions {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 8px;
-            margin-top: 14px;
-        }
-
-        .bulk-actions button {
-            min-height: 44px;
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            background: var(--surface);
-            color: var(--text);
-        }
-
-        .bulk-actions button:hover {
-            background: var(--surface-strong);
-        }
-
-        .bulk-actions .danger {
-            color: var(--danger);
-            border-color: var(--danger-border);
-        }
-
         .empty-state {
             display: none;
             padding: 30px 16px;
@@ -437,10 +460,6 @@ $items = all_items($db);
                 width: 40px;
                 height: 40px;
             }
-
-            .bulk-actions {
-                grid-template-columns: 1fr;
-            }
         }
     </style>
 </head>
@@ -450,9 +469,19 @@ $items = all_items($db);
             <div>
                 <h1><?= e($listName) ?></h1>
             </div>
-            <button class="icon-btn" id="addItem" type="button" aria-label="Add item" title="Add item">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M19 11h-6V5h-2v6H5v2h6v6h2v-6h6v-2Z"/></svg>
-            </button>
+            <div class="header-actions">
+                <button class="icon-btn" id="menuToggle" type="button" aria-label="Open menu" title="Open menu" aria-expanded="false" aria-controls="menuPopover">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 7h16v2H4V7Zm0 4h16v2H4v-2Zm0 4h16v2H4v-2Z"/></svg>
+                </button>
+                <button class="icon-btn" id="addItem" type="button" aria-label="Add item" title="Add item">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M19 11h-6V5h-2v6H5v2h6v6h2v-6h6v-2Z"/></svg>
+                </button>
+                <div class="menu-popover" id="menuPopover">
+                    <button type="button" id="clearChecked">Clear Checked</button>
+                    <button type="button" id="exportMarkdown">Copy Markdown</button>
+                    <button type="button" class="danger" id="clearAll">Clear All</button>
+                </div>
+            </div>
         </header>
 
         <ul class="items-list" id="itemsList">
@@ -468,17 +497,14 @@ $items = all_items($db);
         </ul>
         <div class="empty-state">No groceries yet.</div>
 
-        <div class="bulk-actions">
-            <button type="button" id="clearChecked">Clear Checked</button>
-            <button type="button" id="exportMarkdown">Copy Markdown</button>
-            <button type="button" class="danger" id="clearAll">Clear All</button>
-        </div>
     </main>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
     <script>
         const itemsList = document.getElementById('itemsList');
         const addItemButton = document.getElementById('addItem');
+        const menuToggle = document.getElementById('menuToggle');
+        const menuPopover = document.getElementById('menuPopover');
         const toast = document.getElementById('toast');
 
         const icons = {
@@ -494,6 +520,11 @@ $items = all_items($db);
             toast.classList.add('visible');
             clearTimeout(toastTimeout);
             toastTimeout = setTimeout(() => toast.classList.remove('visible'), 2200);
+        }
+
+        function setMenuOpen(open) {
+            menuPopover.classList.toggle('visible', open);
+            menuToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
         }
 
         async function api(action, payload = {}) {
@@ -561,7 +592,29 @@ $items = all_items($db);
             }
         }
 
+        menuToggle.addEventListener('click', event => {
+            event.stopPropagation();
+            setMenuOpen(!menuPopover.classList.contains('visible'));
+        });
+
+        menuPopover.addEventListener('click', event => {
+            event.stopPropagation();
+        });
+
+        document.addEventListener('click', event => {
+            if (!event.target.closest('.header-actions')) {
+                setMenuOpen(false);
+            }
+        });
+
+        document.addEventListener('keydown', event => {
+            if (event.key === 'Escape') {
+                setMenuOpen(false);
+            }
+        });
+
         addItemButton.addEventListener('click', () => {
+            setMenuOpen(false);
             const pendingItem = itemsList.querySelector('.item.new-item');
             if (pendingItem) {
                 startEditing(pendingItem);
@@ -890,6 +943,7 @@ $items = all_items($db);
         }
 
         document.getElementById('clearChecked').addEventListener('click', async () => {
+            setMenuOpen(false);
             if (!confirm('Clear checked items?')) {
                 return;
             }
@@ -904,6 +958,7 @@ $items = all_items($db);
         });
 
         document.getElementById('clearAll').addEventListener('click', async () => {
+            setMenuOpen(false);
             if (!confirm('Clear all items?')) {
                 return;
             }
@@ -918,6 +973,7 @@ $items = all_items($db);
         });
 
         document.getElementById('exportMarkdown').addEventListener('click', async () => {
+            setMenuOpen(false);
             const lines = [...itemsList.querySelectorAll('.item')].map(item => {
                 const checked = item.querySelector('.item-checkbox').checked ? 'x' : ' ';
                 const text = item.querySelector('.item-text').textContent.trim();
