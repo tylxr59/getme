@@ -15,6 +15,7 @@ Because sometimes you just need a list that:
 ## Features
 
 - Add, edit, and delete items
+- Press Enter while editing to save the entry and start the next one
 - Check off items (they move to the bottom)
 - Drag-and-drop reordering (works on mobile too)
 - System dark mode
@@ -72,10 +73,12 @@ Response:
 
 Add an item. The older `add_item` action is still accepted as an alias for `add`.
 
+Clients may include a unique `request_id` with an add request. Retrying with the same ID returns the original item, which helps when a slow connection drops the response after the item was saved.
+
 ```bash
 curl -X POST https://your-server/getme/ \
   -H "Content-Type: application/json" \
-  -d '{"action": "add", "name": "Milk"}'
+  -d '{"action": "add", "name": "Milk", "request_id": "example-unique-id"}'
 ```
 
 Edit an item:

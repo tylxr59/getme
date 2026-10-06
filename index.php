@@ -21,6 +21,11 @@ $db->exec("CREATE TABLE IF NOT EXISTS items (
     checked INTEGER NOT NULL DEFAULT 0,
     position INTEGER NOT NULL DEFAULT 0
 )");
+$columns = $db->query('PRAGMA table_info(items)')->fetchAll(PDO::FETCH_ASSOC);
+if (!in_array('request_id', array_column($columns, 'name'), true)) {
+    $db->exec('ALTER TABLE items ADD COLUMN request_id TEXT');
+}
+$db->exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_items_request_id ON items(request_id)');
 $db->exec("CREATE INDEX IF NOT EXISTS idx_items_sort ON items(checked, position, id)");
 
 function json_response(array $payload, int $status = 200): void
@@ -106,12 +111,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             case 'add':
             case 'add_item':
-                $stmt = $db->prepare('INSERT INTO items (name, position) VALUES (?, ?)');
-                $stmt->execute([require_name($data), next_position($db)]);
+                $name = require_name($data);
+                if (isset($data['request_id']) && !is_string($data['request_id'])) {
+                    json_response(['success' => false, 'error' => 'Invalid request id'], 422);
+                }
+                $requestId = isset($data['request_id']) ? trim($data['request_id']) : null;
+                if ($requestId !== null && ($requestId === '' || strlen($requestId) > 100)) {
+                    json_response(['success' => false, 'error' => 'Invalid request id'], 422);
+                }
+                if ($requestId !== null) {
+                    $stmt = $db->prepare('SELECT id, name, checked, position FROM items WHERE request_id = ?');
+                    $stmt->execute([$requestId]);
+                    $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+                    if ($existing) {
+                        json_response(['success' => true, 'item' => $existing]);
+                    }
+                }
+                $stmt = $db->prepare('INSERT OR IGNORE INTO items (name, position, request_id) VALUES (?, ?, ?)');
+                $stmt->execute([$name, next_position($db), $requestId]);
+                $itemId = $stmt->rowCount() ? (int) $db->lastInsertId() : null;
+                if ($itemId === null && $requestId !== null) {
+                    $stmt = $db->prepare('SELECT id FROM items WHERE request_id = ?');
+                    $stmt->execute([$requestId]);
+                    $itemId = (int) $stmt->fetchColumn();
+                }
                 json_response([
                     'success' => true,
                     'item' => $db
-                        ->query('SELECT id, name, checked, position FROM items WHERE id = ' . (int) $db->lastInsertId())
+                        ->query('SELECT id, name, checked, position FROM items WHERE id = ' . $itemId)
                         ->fetch(PDO::FETCH_ASSOC),
                 ]);
 
@@ -351,6 +378,10 @@ $items = all_items($db);
             opacity: 0.62;
         }
 
+        .item.save-failed {
+            border-color: var(--danger-border);
+        }
+
         .item.reorder-placeholder {
             box-shadow: none;
             opacity: 0.35;
@@ -515,6 +546,11 @@ $items = all_items($db);
         let toastTimeout;
         let dragState = null;
         let pendingDrag = null;
+        let writeQueue = Promise.resolve();
+        let pendingWrites = 0;
+        let localRevision = 0;
+        let refreshRequested = false;
+        let refreshInFlight = false;
 
         function showToast(message) {
             toast.textContent = message;
@@ -539,6 +575,28 @@ $items = all_items($db);
                 throw new Error(data.error || 'Request failed');
             }
             return data;
+        }
+
+        function queueMutation(work) {
+            localRevision++;
+            pendingWrites++;
+            const result = writeQueue.then(work);
+            writeQueue = result.catch(() => {});
+            result.then(() => {
+                pendingWrites--;
+                maybeRefresh();
+            }, () => {
+                pendingWrites--;
+                maybeRefresh();
+            });
+            return result;
+        }
+
+        function newRequestId() {
+            if (window.crypto && crypto.randomUUID) {
+                return crypto.randomUUID();
+            }
+            return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
         }
 
         function escapeHtml(value) {
@@ -575,7 +633,7 @@ $items = all_items($db);
         }
 
         function currentOrder() {
-            return [...itemsList.querySelectorAll('.item')].map(item => item.dataset.id);
+            return [...itemsList.querySelectorAll('.item[data-id]')].map(item => item.dataset.id);
         }
 
         function appendToUncheckedItems(item) {
@@ -583,13 +641,31 @@ $items = all_items($db);
             firstCheckedItem ? firstCheckedItem.before(item) : itemsList.appendChild(item);
         }
 
-        async function refreshList() {
+        async function maybeRefresh() {
+            if (!refreshRequested || refreshInFlight || pendingWrites || dragState ||
+                itemsList.querySelector('.item.editing, .item.new-item, .item.saving, .item.save-failed')) {
+                return;
+            }
+
+            refreshRequested = false;
+            refreshInFlight = true;
+            const revision = localRevision;
             try {
                 const data = await api('fetch');
-                itemsList.replaceChildren(...data.items.map(createItemElement));
-                updateCount();
+                if (revision !== localRevision || pendingWrites || dragState ||
+                    itemsList.querySelector('.item.editing, .item.new-item, .item.saving, .item.save-failed')) {
+                    refreshRequested = true;
+                } else {
+                    itemsList.replaceChildren(...data.items.map(createItemElement));
+                    updateCount();
+                }
             } catch (error) {
                 showToast(error.message);
+            } finally {
+                refreshInFlight = false;
+                if (refreshRequested) {
+                    maybeRefresh();
+                }
             }
         }
 
@@ -614,9 +690,10 @@ $items = all_items($db);
             }
         });
 
-        addItemButton.addEventListener('click', () => {
+        function openNewItem() {
             setMenuOpen(false);
-            const pendingItem = itemsList.querySelector('.item.new-item');
+            const pendingItem = itemsList.querySelector('.item.new-item.editing') ||
+                itemsList.querySelector('.item.new-item:not(.saving)');
             if (pendingItem) {
                 startEditing(pendingItem);
                 return;
@@ -624,10 +701,13 @@ $items = all_items($db);
 
             const item = createItemElement({ id: null, name: '', checked: 0 });
             item.classList.add('new-item');
+            item.dataset.requestId = newRequestId();
             appendToUncheckedItems(item);
             updateCount();
             startEditing(item);
-        });
+        }
+
+        addItemButton.addEventListener('click', openNewItem);
 
         itemsList.addEventListener('change', async event => {
             if (!event.target.classList.contains('item-checkbox')) {
@@ -641,12 +721,14 @@ $items = all_items($db);
             updateCount();
 
             try {
-                await api('toggle', { id: item.dataset.id, checked: checked ? 1 : 0 });
-                await api('reorder', { items: currentOrder() });
+                const order = currentOrder();
+                await queueMutation(async () => {
+                    await api('toggle', { id: item.dataset.id, checked: checked ? 1 : 0 });
+                    await api('reorder', { items: order });
+                });
             } catch (error) {
-                event.target.checked = !checked;
-                item.classList.toggle('checked', !checked);
                 showToast(error.message);
+                queueRefresh();
             }
         });
 
@@ -655,17 +737,23 @@ $items = all_items($db);
 
             if (deleteButton) {
                 const item = deleteButton.closest('.item');
+                if (item.classList.contains('deleting')) {
+                    return;
+                }
                 if (!item.dataset.id) {
                     item.remove();
                     updateCount();
+                    maybeRefresh();
                     return;
                 }
 
+                item.classList.add('deleting');
                 try {
-                    await api('delete', { id: item.dataset.id });
+                    await queueMutation(() => api('delete', { id: item.dataset.id }));
                     item.remove();
                     updateCount();
                 } catch (error) {
+                    item.classList.remove('deleting');
                     showToast(error.message);
                 }
             }
@@ -685,6 +773,9 @@ $items = all_items($db);
         });
 
         function startEditing(item) {
+            if (item.classList.contains('saving')) {
+                return;
+            }
             const text = item.querySelector('.item-text');
             if (text.classList.contains('editing')) {
                 text.focus();
@@ -693,6 +784,8 @@ $items = all_items($db);
 
             const isNew = !item.dataset.id;
             const original = text.textContent;
+            const savedName = item.dataset.savedName || original;
+            localRevision++;
             text.contentEditable = 'true';
             text.classList.add('editing');
             item.classList.add('editing');
@@ -704,7 +797,7 @@ $items = all_items($db);
             selection.removeAllRanges();
             selection.addRange(range);
 
-            const finish = async save => {
+            const finish = async (save, createNext = false) => {
                 text.removeEventListener('keydown', onKeydown);
                 text.removeEventListener('blur', onBlur);
                 text.contentEditable = 'false';
@@ -717,42 +810,64 @@ $items = all_items($db);
                         item.remove();
                         updateCount();
                     } else {
-                        text.textContent = original;
+                        text.textContent = savedName;
+                        item.classList.remove('save-failed');
+                        delete item.dataset.savedName;
                     }
+                    maybeRefresh();
                     return;
                 }
-                if (!isNew && next === original) {
+                if (!isNew && next === original && !item.classList.contains('save-failed')) {
+                    if (createNext) {
+                        openNewItem();
+                    }
+                    maybeRefresh();
                     return;
                 }
 
+                item.classList.add('saving');
+                if (createNext) {
+                    openNewItem();
+                }
                 try {
                     if (isNew) {
-                        const data = await api('add', { name: next });
+                        const data = await queueMutation(() => api('add', {
+                            name: next,
+                            request_id: item.dataset.requestId
+                        }));
                         item.dataset.id = data.item.id;
                         item.classList.remove('new-item');
                         item.querySelector('.item-checkbox').disabled = false;
                         text.textContent = data.item.name;
-                        await api('reorder', { items: currentOrder() });
                     } else {
-                        await api('edit', { id: item.dataset.id, name: next });
+                        await queueMutation(() => api('edit', { id: item.dataset.id, name: next }));
+                        item.classList.remove('save-failed');
+                        delete item.dataset.savedName;
                     }
                 } catch (error) {
                     if (isNew) {
-                        item.classList.add('new-item');
                         text.textContent = next;
-                        setTimeout(() => startEditing(item), 0);
                     } else {
-                        text.textContent = original;
+                        item.dataset.savedName = savedName;
+                        item.classList.add('save-failed');
+                        text.textContent = next;
                     }
                     showToast(error.message);
+                } finally {
+                    item.classList.remove('saving');
+                    if (isNew && !item.dataset.id &&
+                        !itemsList.querySelector('.item.editing')) {
+                        startEditing(item);
+                    }
+                    maybeRefresh();
                 }
             };
 
             const onBlur = () => finish(true);
             const onKeydown = event => {
-                if (event.key === 'Enter') {
+                if (event.key === 'Enter' && !event.isComposing) {
                     event.preventDefault();
-                    finish(true);
+                    finish(true, true);
                 }
                 if (event.key === 'Escape') {
                     event.preventDefault();
@@ -821,7 +936,9 @@ $items = all_items($db);
             }
 
             const item = event.target.closest('.item');
-            if (!item || item.classList.contains('editing') || event.target.closest('button, input')) {
+            if (!item || item.classList.contains('editing') ||
+                item.classList.contains('saving') || !item.dataset.id ||
+                event.target.closest('button, input')) {
                 return;
             }
 
@@ -922,6 +1039,8 @@ $items = all_items($db);
 
             if (save) {
                 saveOrder();
+            } else {
+                maybeRefresh();
             }
         }
 
@@ -937,7 +1056,8 @@ $items = all_items($db);
 
         async function saveOrder() {
             try {
-                await api('reorder', { items: currentOrder() });
+                const order = currentOrder();
+                await queueMutation(() => api('reorder', { items: order }));
             } catch (error) {
                 showToast(error.message);
             }
@@ -950,7 +1070,7 @@ $items = all_items($db);
             }
 
             try {
-                await api('clear_checked');
+                await queueMutation(() => api('clear_checked'));
                 itemsList.querySelectorAll('.item.checked').forEach(item => item.remove());
                 updateCount();
             } catch (error) {
@@ -965,7 +1085,7 @@ $items = all_items($db);
             }
 
             try {
-                await api('clear_all');
+                await queueMutation(() => api('clear_all'));
                 itemsList.replaceChildren();
                 updateCount();
             } catch (error) {
@@ -991,8 +1111,9 @@ $items = all_items($db);
 
         let refreshTimeout;
         function queueRefresh() {
+            refreshRequested = true;
             clearTimeout(refreshTimeout);
-            refreshTimeout = setTimeout(refreshList, 250);
+            refreshTimeout = setTimeout(maybeRefresh, 250);
         }
 
         window.addEventListener('focus', queueRefresh);
