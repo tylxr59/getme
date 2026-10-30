@@ -47,7 +47,7 @@ Because sometimes you just need a list that:
 
 ## 🎯 Features
 
-|                         |                                                                                                           |
+| Feature                 | What it does                                                                                              |
 | ----------------------- | --------------------------------------------------------------------------------------------------------- |
 | ✏️ **Quick editing**    | Add, edit, and delete items. Press Enter while editing to save and start the next one.                    |
 | ✅ **Check off items**  | Checked items move to the bottom.                                                                         |
