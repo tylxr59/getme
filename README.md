@@ -1,6 +1,6 @@
 # getme
 
-A dead-simple, self-hosted list app. One PHP file. One SQLite database. Anyone with the URL can use it.
+A dead-simple, self-hosted list app. A small PHP backend. One SQLite database. Anyone with the URL can use it.
 
 getme also has a Pebble companion app: [getme for Pebble](https://github.com/tylxr59/getme-for-pebble).
 
@@ -31,18 +31,35 @@ Because sometimes you just need a list that:
 
 ## Installation
 
-1. Drop `index.php` on any PHP-enabled web server
+1. Upload `index.php`, `server/`, and `web/` together to a PHP-enabled web server
 2. Make sure the directory is writable (for the SQLite database)
 3. Open it in your browser
 
 The SQLite database (`getme.db`) is created automatically on first run.
 
-To rename the list, edit `$listName` near the top of `index.php`. To move the database outside the web directory, edit `$databasePath`.
+To rename the list, edit `$listName` near the top of `index.php`. To move the database outside the web directory, set `GETME_DATABASE` or edit `$databasePath`.
 
 ## Requirements
 
 - PHP 7.4+ with PDO SQLite extension
 - A web server (Apache, Nginx, etc.)
+
+## Architecture and development
+
+The API, list service, web client state, and presentation live in separate modules.
+See [architecture and migration](docs/architecture.md) and the [versioned sync API](docs/api.md).
+The versioned API provides atomic batches, revision conflict detection, and durable
+operation deduplication. Existing unversioned clients remain supported.
+
+Run checks with PHP CLI (PDO SQLite), Node, and Python:
+
+```bash
+php tests/api.php
+node --test tests/web.test.js
+python tests/http_integration.py
+```
+
+The HTTP test starts a loopback-only PHP server with a temporary database.
 
 ## API
 
