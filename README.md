@@ -49,9 +49,10 @@ Because sometimes you just need a list that:
 
 | Feature                 | What it does                                                                                              |
 | ----------------------- | --------------------------------------------------------------------------------------------------------- |
-| ✏️ **Quick editing**    | Add, edit, and delete items. Press Enter while editing to save and start the next one.                    |
-| ✅ **Check off items**  | Checked items move to the bottom.                                                                         |
-| ↕️ **Drag to reorder**  | Works with a mouse or touch.                                                                              |
+| ✏️ **Quick editing**    | Add and edit items. Press Enter while editing to save and start the next one.                             |
+| ✅ **Check off items**  | Checked items move to a Done section, and a progress bar shows how far along you are.                     |
+| ↕️ **Drag to reorder**  | Drag with a mouse, or press and hold on a phone so a swipe still scrolls.                                 |
+| 🗑️ **Quick delete**     | Hover and click the trash can, or swipe left on a phone.                                                  |
 | 🌗 **Dark mode**        | Follows your system theme.                                                                                |
 | 🔄 **Always current**   | Refreshes when you return to the tab.                                                                     |
 | 📋 **Copy as Markdown** | Paste your list anywhere.                                                                                 |
