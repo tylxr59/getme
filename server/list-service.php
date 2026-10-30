@@ -23,16 +23,23 @@ final class ListService
 
     private function snapshot(): array
     {
-        return ['revision' => $this->revision(), 'items' => $this->db->query(
+        return ['revision' => $this->revision(), 'items' => array_map([self::class, 'item'], $this->db->query(
             'SELECT id, name, checked, position FROM items ORDER BY checked, position, id'
-        )->fetchAll(PDO::FETCH_ASSOC)];
+        )->fetchAll(PDO::FETCH_ASSOC))];
+    }
+
+    // PDO SQLite returns integer columns as strings before PHP 8.1.
+    private static function item(array $row): array
+    {
+        return ['id' => (int) $row['id'], 'name' => $row['name'], 'checked' => (int) $row['checked'], 'position' => (int) $row['position']];
     }
 
     public function legacyAdd(string $requestId): ?array
     {
         $query = $this->db->prepare('SELECT id, name, checked, position FROM items WHERE request_id = ?');
         $query->execute([$requestId]);
-        return $query->fetch(PDO::FETCH_ASSOC) ?: null;
+        $row = $query->fetch(PDO::FETCH_ASSOC);
+        return $row ? self::item($row) : null;
     }
 
     public function read(?int $known = null): array
