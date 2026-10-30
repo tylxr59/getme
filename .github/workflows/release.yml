@@ -1,0 +1,38 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Package
+        id: package
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p "dist/getme"
+          cp -r index.php server web LICENSE README.md "dist/getme/"
+          (cd dist && zip -qr "getme-${version}.zip" getme)
+          echo "file=dist/getme-${version}.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "${{ steps.package.outputs.file }}" \
+            --title "getme ${GITHUB_REF_NAME#v}" \
+            --verify-tag \
+            --generate-notes
