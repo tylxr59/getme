@@ -12,7 +12,7 @@
   <a href="https://github.com/tylxr59/getme/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/tylxr59/getme/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/tylxr59/getme/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/tylxr59/getme?display_name=tag&sort=semver"></a>
   <a href="#-requirements"><img alt="PHP 7.4+" src="https://img.shields.io/badge/PHP-7.4%2B-777bb4?logo=php&logoColor=white"></a>
-  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/github/license/tylxr59/getme"></a>
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-97ca00"></a>
 </p>
 
 <p align="center">
@@ -23,8 +23,6 @@
 </p>
 
 ---
-
-## 🛒 getme
 
 getme is a dead-simple, self-hosted list app: a small PHP backend and one SQLite database. Anyone with the URL can use it.
 
