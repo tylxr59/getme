@@ -3,14 +3,17 @@ const itemsList = document.getElementById('itemsList');
         const menuToggle = document.getElementById('menuToggle');
         const menuPopover = document.getElementById('menuPopover');
         const toast = document.getElementById('toast');
+        const summary = document.getElementById('summary');
+        const progressBar = document.getElementById('progressBar');
 
         const icons = {
-            delete: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V7H6v12ZM8 4l1-1h6l1 1h4v2H4V4h4Z"/></svg>'
+            delete: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>'
         };
 
         let toastTimeout;
         let dragState = null;
         let pendingDrag = null;
+        let swipeState = null;
         const listState = new ListState(maybeRefresh);
         let refreshRequested = false;
         let refreshInFlight = false;
@@ -74,9 +77,16 @@ const itemsList = document.getElementById('itemsList');
         }
 
         function updateCount() {
-            const items = [...itemsList.querySelectorAll('.item')];
+            const items = [...itemsList.querySelectorAll('.item[data-id]:not(.swiped-away)')];
             const total = items.length;
-            document.querySelector('.empty-state').classList.toggle('visible', total === 0);
+            const done = items.filter(item => item.classList.contains('checked')).length;
+            const left = total - done;
+            document.querySelector('.empty-state').classList.toggle('visible',
+                !itemsList.querySelector('.item:not(.swiped-away)'));
+            summary.textContent = total === 0 ? 'Your list is empty'
+                : left === 0 ? 'All done'
+                : `${left} to get` + (done ? ` · ${done} done` : '');
+            progressBar.style.width = `${total ? Math.round(done / total * 100) : 0}%`;
         }
 
         function currentOrder() {
@@ -89,7 +99,7 @@ const itemsList = document.getElementById('itemsList');
         }
 
         async function maybeRefresh() {
-            if (!refreshRequested || refreshInFlight || listState.pendingWrites || dragState ||
+            if (!refreshRequested || refreshInFlight || listState.pendingWrites || dragState || swipeState ||
                 itemsList.querySelector('.item.editing, .item.new-item, .item.saving, .item.save-failed')) {
                 return;
             }
@@ -99,7 +109,7 @@ const itemsList = document.getElementById('itemsList');
             const revision = listState.localRevision;
             try {
                 const data = await api('fetch');
-                if (revision !== listState.localRevision || listState.pendingWrites || dragState ||
+                if (revision !== listState.localRevision || listState.pendingWrites || dragState || swipeState ||
                     itemsList.querySelector('.item.editing, .item.new-item, .item.saving, .item.save-failed')) {
                     refreshRequested = true;
                 } else {
@@ -155,6 +165,7 @@ const itemsList = document.getElementById('itemsList');
         }
 
         addItemButton.addEventListener('click', openNewItem);
+        document.getElementById('addRow').addEventListener('click', openNewItem);
 
         itemsList.addEventListener('change', async event => {
             if (!event.target.classList.contains('item-checkbox')) {
@@ -179,30 +190,34 @@ const itemsList = document.getElementById('itemsList');
             }
         });
 
-        itemsList.addEventListener('click', async event => {
+        async function deleteItem(item) {
+            if (item.classList.contains('deleting')) {
+                return false;
+            }
+            if (!item.dataset.id) {
+                item.remove();
+                updateCount();
+                maybeRefresh();
+                return true;
+            }
+
+            item.classList.add('deleting');
+            try {
+                await queueMutation(() => api('delete', { id: item.dataset.id }));
+                item.remove();
+                updateCount();
+                return true;
+            } catch (error) {
+                item.classList.remove('deleting');
+                showToast(error.message);
+                return false;
+            }
+        }
+
+        itemsList.addEventListener('click', event => {
             const deleteButton = event.target.closest('.delete');
-
             if (deleteButton) {
-                const item = deleteButton.closest('.item');
-                if (item.classList.contains('deleting')) {
-                    return;
-                }
-                if (!item.dataset.id) {
-                    item.remove();
-                    updateCount();
-                    maybeRefresh();
-                    return;
-                }
-
-                item.classList.add('deleting');
-                try {
-                    await queueMutation(() => api('delete', { id: item.dataset.id }));
-                    item.remove();
-                    updateCount();
-                } catch (error) {
-                    item.classList.remove('deleting');
-                    showToast(error.message);
-                }
+                deleteItem(deleteButton.closest('.item'));
             }
         });
 
@@ -286,6 +301,7 @@ const itemsList = document.getElementById('itemsList');
                         item.classList.remove('new-item');
                         item.querySelector('.item-checkbox').disabled = false;
                         text.textContent = data.item.name;
+                        updateCount();
                     } else {
                         await queueMutation(() => api('edit', { id: item.dataset.id, name: next }));
                         item.classList.remove('save-failed');
@@ -330,6 +346,19 @@ const itemsList = document.getElementById('itemsList');
             element.draggable = false;
             element.addEventListener('pointerdown', startPointerDrag);
         }
+
+        // Once a touch drag is live, hold the page still under the finger.
+        document.addEventListener('touchmove', event => {
+            if (dragState || swipeState) {
+                event.preventDefault();
+            }
+        }, { passive: false });
+
+        itemsList.addEventListener('contextmenu', event => {
+            if (dragState || pendingDrag) {
+                event.preventDefault();
+            }
+        });
 
         function dragAfterElement(y, selector) {
             return [...itemsList.querySelectorAll(selector)].reduce((closest, child) => {
@@ -392,14 +421,45 @@ const itemsList = document.getElementById('itemsList');
             pendingDrag = {
                 item,
                 pointerId: event.pointerId,
+                touch: event.pointerType !== 'mouse',
                 startX: event.clientX,
-                startY: event.clientY
+                startY: event.clientY,
+                clientX: event.clientX,
+                clientY: event.clientY
             };
 
-            item.setPointerCapture(event.pointerId);
             item.addEventListener('pointermove', movePointerDrag);
             item.addEventListener('pointerup', endPointerDrag, { once: true });
             item.addEventListener('pointercancel', cancelPointerDrag, { once: true });
+
+            if (!pendingDrag.touch) {
+                item.setPointerCapture(event.pointerId);
+                return;
+            }
+
+            // Touch drags start with a long press so a swipe still scrolls the page.
+            item.classList.add('press-pending');
+            pendingDrag.timer = setTimeout(() => {
+                item.classList.remove('press-pending');
+                if (!pendingDrag || pendingDrag.item !== item) {
+                    return;
+                }
+                item.setPointerCapture(pendingDrag.pointerId);
+                if (navigator.vibrate) {
+                    navigator.vibrate(10);
+                }
+                beginPointerDrag(pendingDrag);
+            }, 350);
+        }
+
+        function abandonPendingDrag() {
+            const { item, timer } = pendingDrag;
+            clearTimeout(timer);
+            item.classList.remove('press-pending');
+            item.removeEventListener('pointermove', movePointerDrag);
+            item.removeEventListener('pointerup', endPointerDrag);
+            item.removeEventListener('pointercancel', cancelPointerDrag);
+            pendingDrag = null;
         }
 
         function beginPointerDrag(event) {
@@ -435,9 +495,20 @@ const itemsList = document.getElementById('itemsList');
 
         function movePointerDrag(event) {
             if (pendingDrag && event.pointerId === pendingDrag.pointerId) {
+                pendingDrag.clientX = event.clientX;
+                pendingDrag.clientY = event.clientY;
                 const deltaX = event.clientX - pendingDrag.startX;
                 const deltaY = event.clientY - pendingDrag.startY;
-                if (Math.hypot(deltaX, deltaY) < 6) {
+                if (Math.hypot(deltaX, deltaY) < (pendingDrag.touch ? 10 : 6)) {
+                    return;
+                }
+                if (pendingDrag.touch) {
+                    const { item, pointerId, startX } = pendingDrag;
+                    const leftward = deltaX < 0 && Math.abs(deltaX) > Math.abs(deltaY) * 1.5;
+                    abandonPendingDrag();
+                    if (leftward) {
+                        beginSwipe(item, pointerId, startX);
+                    }
                     return;
                 }
                 event.preventDefault();
@@ -455,7 +526,9 @@ const itemsList = document.getElementById('itemsList');
         }
 
         function finishPointerDrag(save) {
-            pendingDrag = null;
+            if (pendingDrag) {
+                abandonPendingDrag();
+            }
 
             if (!dragState) {
                 return;
@@ -499,6 +572,76 @@ const itemsList = document.getElementById('itemsList');
         function cancelPointerDrag(event) {
             event.currentTarget.removeEventListener('pointermove', movePointerDrag);
             finishPointerDrag(false);
+        }
+
+        // Swiping a row left on touch screens deletes it once past the threshold.
+        function beginSwipe(item, pointerId, startX) {
+            swipeState = { item, pointerId, startX, armed: false };
+            item.setPointerCapture(pointerId);
+            item.classList.add('swiping');
+            item.addEventListener('pointermove', moveSwipe);
+            item.addEventListener('pointerup', endSwipe);
+            item.addEventListener('pointercancel', endSwipe);
+        }
+
+        function moveSwipe(event) {
+            if (!swipeState || event.pointerId !== swipeState.pointerId) {
+                return;
+            }
+
+            const { item } = swipeState;
+            const offset = Math.min(0, event.clientX - swipeState.startX);
+            const armed = -offset > Math.min(120, item.offsetWidth * 0.35);
+            if (armed && !swipeState.armed && navigator.vibrate) {
+                navigator.vibrate(10);
+            }
+            swipeState.armed = armed;
+            item.classList.toggle('swipe-armed', armed);
+            item.style.setProperty('--swipe', `${offset}px`);
+        }
+
+        function settleSwipe(item, offset) {
+            item.classList.add('swipe-settling');
+            item.style.setProperty('--swipe', `${offset}px`);
+            return new Promise(resolve => setTimeout(resolve, 220));
+        }
+
+        function resetSwipe(item) {
+            item.classList.remove('swiping', 'swipe-armed', 'swipe-settling');
+            item.style.removeProperty('--swipe');
+        }
+
+        async function endSwipe(event) {
+            if (!swipeState || event.pointerId !== swipeState.pointerId) {
+                return;
+            }
+
+            const { item, armed } = swipeState;
+            swipeState = null;
+            item.removeEventListener('pointermove', moveSwipe);
+            item.removeEventListener('pointerup', endSwipe);
+            item.removeEventListener('pointercancel', endSwipe);
+
+            if (!armed || event.type !== 'pointerup') {
+                await settleSwipe(item, 0);
+                resetSwipe(item);
+                maybeRefresh();
+                return;
+            }
+
+            await settleSwipe(item, -item.offsetWidth);
+            await item.animate([
+                { height: `${item.offsetHeight}px` },
+                { height: '0px', minHeight: '0px', paddingTop: '0px', paddingBottom: '0px' }
+            ], { duration: 180, easing: 'ease-in' }).finished;
+            item.classList.add('swiped-away');
+            updateCount();
+
+            if (!await deleteItem(item)) {
+                item.classList.remove('swiped-away');
+                resetSwipe(item);
+                updateCount();
+            }
         }
 
         async function saveOrder() {

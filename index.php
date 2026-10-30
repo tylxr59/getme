@@ -19,50 +19,85 @@ try {
 if ($_SERVER['REQUEST_METHOD'] === 'POST') dispatch_api($service);
 $snapshot = $service->read();
 $items = $snapshot['items'];
+$doneCount = count(array_filter($items, function ($item) { return (int) $item['checked']; }));
+$leftCount = count($items) - $doneCount;
+if (!$items) $summary = 'Your list is empty';
+elseif (!$leftCount) $summary = 'All done';
+else $summary = $leftCount . ' to get' . ($doneCount ? " · $doneCount done" : '');
+$progress = $items ? round($doneCount / count($items) * 100) : 0;
 function e(string $value): string { return htmlspecialchars($value, ENT_QUOTES, 'UTF-8'); }
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#f6f1e7" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#171513" media="(prefers-color-scheme: dark)">
     <title><?= e($listName) ?></title>
     <link rel="stylesheet" href="web/styles.css">
 </head>
 <body>
     <main class="app">
         <header class="topbar">
-            <div>
-                <h1><?= e($listName) ?></h1>
+            <div class="title-block">
+                <h1><span class="title-mark"><?= e($listName) ?></span></h1>
+                <p class="summary" id="summary" aria-live="polite"><?= e($summary) ?></p>
             </div>
             <div class="header-actions">
                 <button class="icon-btn" id="menuToggle" type="button" aria-label="Open menu" title="Open menu" aria-expanded="false" aria-controls="menuPopover">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 7h16v2H4V7Zm0 4h16v2H4v-2Zm0 4h16v2H4v-2Z"/></svg>
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="2" fill="currentColor"/><circle cx="12" cy="12" r="2" fill="currentColor"/><circle cx="19" cy="12" r="2" fill="currentColor"/></svg>
                 </button>
-                <button class="icon-btn" id="addItem" type="button" aria-label="Add item" title="Add item">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M19 11h-6V5h-2v6H5v2h6v6h2v-6h6v-2Z"/></svg>
+                <button class="icon-btn primary" id="addItem" type="button" aria-label="Add item" title="Add item">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M12 5v14M5 12h14"/></svg>
                 </button>
                 <div class="menu-popover" id="menuPopover">
-                    <button type="button" id="clearChecked">Clear Checked</button>
-                    <button type="button" id="exportMarkdown">Copy Markdown</button>
-                    <button type="button" class="danger" id="clearAll">Clear All</button>
+                    <button type="button" id="clearChecked">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m4 12 5 5L20 6"/></svg>
+                        Clear checked
+                    </button>
+                    <button type="button" id="exportMarkdown">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M9 9h10v11H9zM5 15V4h10"/></svg>
+                        Copy as Markdown
+                    </button>
+                    <hr>
+                    <button type="button" class="danger" id="clearAll">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
+                        Clear all
+                    </button>
                 </div>
             </div>
         </header>
+        <div class="progress" aria-hidden="true"><span id="progressBar" style="width: <?= $progress ?>%"></span></div>
 
-        <ul class="items-list" id="itemsList">
-            <?php foreach ($items as $item): ?>
-                <li class="item <?= (int) $item['checked'] ? 'checked' : '' ?>" data-id="<?= (int) $item['id'] ?>">
-                    <input type="checkbox" class="item-checkbox" aria-label="Toggle item" <?= (int) $item['checked'] ? 'checked' : '' ?>>
-                    <span class="item-text" contenteditable="false"><?= e($item['name']) ?></span>
-                    <button class="item-action delete" type="button" aria-label="Delete item" title="Delete item">
-                        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V7H6v12ZM8 4l1-1h6l1 1h4v2H4V4h4Z"/></svg>
-                    </button>
-                </li>
-            <?php endforeach; ?>
-        </ul>
-        <div class="empty-state">No items yet.</div>
-
+        <section class="sheet">
+            <ul class="items-list" id="itemsList">
+                <?php foreach ($items as $item): ?>
+                    <li class="item <?= (int) $item['checked'] ? 'checked' : '' ?>" data-id="<?= (int) $item['id'] ?>">
+                        <input type="checkbox" class="item-checkbox" aria-label="Toggle item" <?= (int) $item['checked'] ? 'checked' : '' ?>>
+                        <span class="item-text" contenteditable="false"><?= e($item['name']) ?></span>
+                        <button class="item-action delete" type="button" aria-label="Delete item" title="Delete item">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
+                        </button>
+                    </li>
+                <?php endforeach; ?>
+            </ul>
+            <div class="empty-state">
+                <div class="empty-note" aria-hidden="true"></div>
+                <p class="empty-title">Nothing to get</p>
+                <p class="empty-hint">Add the first thing you need.</p>
+            </div>
+            <button class="add-row" id="addRow" type="button">
+                <span class="add-row-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M12 6v12M6 12h12"/></svg>
+                </span>
+                Add an item
+            </button>
+        </section>
+        <p class="hint">
+            <span class="hint-mouse">Double-click to edit · drag to reorder · hover to delete</span>
+            <span class="hint-touch">Double-tap to edit · hold to reorder · swipe left to delete</span>
+        </p>
     </main>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
